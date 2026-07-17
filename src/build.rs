@@ -74,6 +74,7 @@ pub fn build_with_mode(
         .into_iter()
         .chain(stale_plans)
         .collect::<std::collections::BTreeSet<_>>();
+    crate::text::write_exports(root, config, &prepared.project)?;
     if !source_changed && affected.is_empty() {
         return Ok((prepared, None, Vec::new()));
     }

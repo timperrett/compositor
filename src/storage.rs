@@ -274,3 +274,18 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), AppError> {
         .map_err(|error| AppError::Io(error.error))?;
     Ok(())
 }
+
+pub fn write_text_if_changed(path: &Path, text: &str) -> Result<bool, AppError> {
+    match fs::read_to_string(path) {
+        Ok(existing) if existing == text => Ok(false),
+        Ok(_) => {
+            write_text_atomic(path, text)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_text_atomic(path, text)?;
+            Ok(true)
+        }
+        Err(error) => Err(AppError::Io(error)),
+    }
+}

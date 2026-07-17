@@ -114,6 +114,64 @@ fn unchanged_build_is_a_no_op() {
 }
 
 #[test]
+fn build_generates_plain_text_layout_exports_without_markdown() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\n# A **bold** beginning\n\nA [linked](https://example.com) paragraph.\n\n- First item\n- Second item\n\n---\n\n> A closing quotation.\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("compendiums/01-magic/02-second.md"),
+        "---\nid: second\ntitle: Second Story\n---\nSecond body.\n",
+    )
+    .unwrap();
+    let config = Config::load(directory.path()).unwrap();
+
+    build::build(directory.path(), &config, None).unwrap();
+
+    let story = fs::read_to_string(directory.path().join("output/text/story.txt")).unwrap();
+    assert_eq!(
+        story,
+        "Story\n\nA bold beginning\n\nA linked paragraph.\n\n• First item\n• Second item\n\nA closing quotation.\n"
+    );
+    assert!(!story.contains("<!--"));
+    assert!(!story.contains("**"));
+    assert!(!story.contains("[linked]("));
+    let compendium = fs::read_to_string(directory.path().join("output/text/magic.txt")).unwrap();
+    assert_eq!(
+        compendium,
+        format!("{story}\n\nSecond Story\n\nSecond body.\n")
+    );
+    assert!(directory.path().join("output/text/second.txt").is_file());
+}
+
+#[test]
+fn unchanged_build_restores_missing_plain_text_export_and_source_edits_refresh_it() {
+    let directory = project();
+    let config = Config::load(directory.path()).unwrap();
+    build::build(directory.path(), &config, None).unwrap();
+    let source = directory.path().join("compendiums/01-magic/01-story.md");
+    let original_source = fs::read_to_string(&source).unwrap();
+    let export = directory.path().join("output/text/story.txt");
+    fs::remove_file(&export).unwrap();
+
+    build::build(directory.path(), &config, None).unwrap();
+
+    assert_eq!(fs::read_to_string(&source).unwrap(), original_source);
+    assert!(export.is_file());
+    fs::write(
+        &source,
+        original_source.replace("Once upon a time.", "Once upon a sunny time."),
+    )
+    .unwrap();
+    build::build(directory.path(), &config, None).unwrap();
+    assert!(fs::read_to_string(export)
+        .unwrap()
+        .contains("Once upon a sunny time."));
+}
+
+#[test]
 fn local_edit_keeps_anchored_unit_identity() {
     let directory = project();
     let config = Config::load(directory.path()).unwrap();
@@ -587,7 +645,8 @@ fn cli_initializes_and_builds_json_output() {
         "{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    assert!(String::from_utf8(build.stdout)
-        .unwrap()
-        .contains("\"command\": \"build\""));
+    let build_output = String::from_utf8(build.stdout).unwrap();
+    assert!(build_output.contains("\"command\": \"build\""));
+    assert!(build_output.contains("\"text_exports\""));
+    assert!(build_output.contains("output/text/story.txt"));
 }

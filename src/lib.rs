@@ -14,6 +14,7 @@ pub mod planning;
 pub mod proof;
 pub mod report;
 pub mod storage;
+pub mod text;
 pub mod validation;
 
 use std::path::PathBuf;

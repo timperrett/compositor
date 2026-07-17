@@ -218,6 +218,10 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                         .iter()
                         .map(|plan| format!("{}:v{:03}", plan.story_id, plan.revision))
                         .collect(),
+                    text_exports: crate::text::export_paths(root, &config, &prepared.project)
+                        .into_iter()
+                        .map(|path| relative_path(root, &path))
+                        .collect(),
                     changes: prepared.changes,
                 },
                 prepared.validation,
@@ -235,6 +239,10 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                     plans: plans
                         .iter()
                         .map(|plan| format!("{}:v{:03}", plan.story_id, plan.revision))
+                        .collect(),
+                    text_exports: crate::text::export_paths(root, &config, &prepared.project)
+                        .into_iter()
+                        .map(|path| relative_path(root, &path))
                         .collect(),
                     changes: prepared.changes,
                 },
@@ -544,6 +552,7 @@ fn set_art_relationship(
 struct BuildOutput {
     wrote_manifest_revision: Option<u64>,
     plans: Vec<String>,
+    text_exports: Vec<String>,
     changes: ChangeSet,
 }
 
@@ -572,6 +581,7 @@ fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(),
     fs::create_dir_all(root.join(".compositor/locks"))?;
     fs::create_dir_all(root.join("output/reports"))?;
     fs::create_dir_all(root.join("output/proofs"))?;
+    fs::create_dir_all(root.join("output/text"))?;
     fs::write(config_path, DEFAULT_CONFIG)?;
     fs::write(readme_path, PROJECT_README)?;
     print_report(
@@ -606,8 +616,10 @@ This directory is a Compositor project. Write stories in Markdown, then use
 - `.compositor/` is generated state: the current manifest, immutable history,
   page-plan and illustration-requirement revisions, candidate art briefs, and
   any manual identity resolutions. Do not edit it by hand.
-- `output/reports/` and `output/proofs/` contain generated review artifacts.
-  HTML proofs are written to `output/proofs/`.
+- `output/reports/`, `output/proofs/`, and `output/text/` contain generated
+  review and layout artifacts. HTML proofs are written to `output/proofs/`;
+  plain-text files for import into a layout application are written to
+  `output/text/`. Do not edit generated output as manuscript source.
 
 ## Authoring a story
 
@@ -636,7 +648,8 @@ include `art`, `layout`, `keep-with-next`, and `unit`; see `compositor --help`.
 1. Run `compositor validate` after adding or editing stories.
 2. Run `compositor build --mode conservative` to retain unaffected page
    assignments. Use `rebalance` or `fresh` only when you explicitly want a
-   complete candidate repagination.
+   complete candidate repagination. It also refreshes plain-text layout exports
+   in `output/text/`.
 3. Run `compositor status --format json` for a machine-readable change report.
 4. Run `compositor proof` to generate HTML proofs.
 

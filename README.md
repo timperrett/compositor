@@ -24,4 +24,7 @@ the conservative mode only. Use `--format json` for stable machine-readable
 reports.
 
 Generated state lives in `.compositor/`; HTML proofs are written to
-`output/proofs/`. Normal commands never modify source Markdown or assets.
+`output/proofs/`; layout-ready plain-text exports are written to `output/text/`
+on every successful build. Both story-level and compendium-level `.txt` files
+are fully generated for import into a layout application. Normal commands never
+modify source Markdown or assets.
