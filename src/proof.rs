@@ -17,7 +17,17 @@ pub fn render_html(story: &Story, plan: &PagePlan, manifest_story: &ManifestStor
                 .collect::<String>()
         };
         output.push_str(&format!("<section class=\"page\"><p class=\"meta\">pages {:?} · {} · {}</p><article>{}</article>", assignment.pages, escape(&assignment.units.join(", ")), escape(&assignment.layout), content));
-        if assignment.layout.contains("art")
+        if let Some(asset) = assignment
+            .units
+            .iter()
+            .find_map(|unit_id| approved_art(manifest_story, unit_id))
+        {
+            output.push_str(&format!(
+                "<img alt=\"approved artwork\" src=\"../../{}\">",
+                escape(asset)
+            ));
+        } else if assignment.art_id.is_some()
+            || assignment.layout.contains("art")
             || assignment.layout == "full-page"
             || assignment.layout == "full-spread"
         {
@@ -34,6 +44,31 @@ pub fn render_html(story: &Story, plan: &PagePlan, manifest_story: &ManifestStor
     }
     output.push_str("</body></html>\n");
     output
+}
+
+pub fn render_compendium_html(title: &str, stories: &[(String, String)]) -> String {
+    let links = stories
+        .iter()
+        .map(|(story_title, filename)| {
+            format!(
+                "<li><a href=\"{}\">{}</a></li>",
+                escape(filename),
+                escape(story_title)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>body{{font-family:serif;max-width:42rem;margin:3rem auto}}</style></head><body><h1>{}</h1><p>Compendium proof index</p><ol>{}</ol></body></html>\n",
+        escape(title), escape(title), links
+    )
+}
+
+fn approved_art<'a>(manifest_story: &'a ManifestStory, unit_id: &str) -> Option<&'a str> {
+    manifest_story
+        .units
+        .iter()
+        .find(|unit| unit.id == unit_id)
+        .and_then(|unit| unit.approved_art.as_deref())
 }
 
 fn render_whole_unit(story: &Story, manifest_story: &ManifestStory, unit_id: &str) -> String {

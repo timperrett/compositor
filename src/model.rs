@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// Version 2 introduces explicit production-artifact state. Projects with a
+/// version-1 state directory must regenerate their state as a deliberate,
+/// clean migration rather than silently reinterpreting approved artifacts.
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceProject {
@@ -82,7 +85,9 @@ pub struct ManifestUnit {
     pub normalized_content: String,
     pub state: UnitState,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub asset_path: Option<String>,
+    pub art_brief: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_art: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,6 +187,7 @@ pub struct PagePlan {
     /// legacy plan, which is intentionally treated as stale.
     #[serde(default)]
     pub pagination_fingerprint: String,
+    pub status: ArtifactStatus,
     pub assignments: Vec<PageAssignment>,
     pub warnings: Vec<String>,
 }
@@ -197,6 +203,49 @@ pub struct PageAssignment {
     pub fragments: Vec<PageFragment>,
     pub layout: String,
     pub word_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub art_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactStatus {
+    Candidate,
+    NeedsReview,
+    Approved,
+    Superseded,
+    Orphaned,
+    Locked,
+}
+
+impl Default for ArtifactStatus {
+    fn default() -> Self {
+        Self::Candidate
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IllustrationRequirement {
+    pub schema_version: u32,
+    pub art_id: String,
+    pub story_id: String,
+    pub unit_ids: Vec<String>,
+    pub pages: Vec<u32>,
+    pub layout: String,
+    pub status: ArtifactStatus,
+    pub revision: u64,
+    /// The authored art intent, retained so a generated Markdown brief has a
+    /// deterministic starting point without copying it into the manuscript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub art_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactIndex {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    #[serde(default)]
+    pub candidates: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

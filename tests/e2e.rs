@@ -1,6 +1,6 @@
 use compositor::build;
 use compositor::config::{Config, DEFAULT_CONFIG};
-use compositor::model::ChangeKind;
+use compositor::model::{ChangeKind, IllustrationRequirement};
 use compositor::storage;
 use std::fs;
 use std::process::Command;
@@ -136,6 +136,276 @@ fn local_edit_keeps_anchored_unit_identity() {
         .changes
         .iter()
         .any(|change| change.kind == ChangeKind::Unchanged));
+}
+
+#[test]
+fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
+    let directory = project();
+    replace_story_with_units(&directory, &[100, 100]);
+    let config = Config::load(directory.path()).unwrap();
+    build::build(directory.path(), &config, None).unwrap();
+    let story = directory.path().join("compendiums/01-magic/01-story.md");
+    fs::write(
+        &story,
+        fs::read_to_string(&story).unwrap().replacen(
+            "<!-- anchor: unit-0 -->\nword",
+            "<!-- anchor: unit-0 -->\nchanged",
+            1,
+        ),
+    )
+    .unwrap();
+    let (_, _, plans) = build::build(directory.path(), &config, None).unwrap();
+    let plan = &plans[0];
+    assert!(plan
+        .assignments
+        .iter()
+        .any(|assignment| { assignment.pages == [2] && assignment.units == ["unit-1"] }));
+    assert!(plan
+        .assignments
+        .iter()
+        .any(|assignment| { assignment.pages == [3] && assignment.units == ["unit-0"] }));
+}
+
+#[test]
+fn artwork_requirements_and_candidate_briefs_are_generated_from_art_notes_or_layouts() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\n<!-- layout: full-spread -->\nEdgar opens the book.\n",
+    )
+    .unwrap();
+    let config = Config::load(directory.path()).unwrap();
+    let (_, _, plans) = build::build(directory.path(), &config, None).unwrap();
+    assert_eq!(plans[0].assignments[0].art_id.as_deref(), Some("reveal"));
+    let requirement: IllustrationRequirement = storage::read_json(
+        &directory
+            .path()
+            .join(".compositor/requirements/reveal/v001-candidate.json"),
+    )
+    .unwrap();
+    assert_eq!(requirement.pages, vec![1, 2]);
+    assert_eq!(requirement.art_note.as_deref(), Some("A moonlit library."));
+    let brief = fs::read_to_string(
+        directory
+            .path()
+            .join(".compositor/briefs/reveal/v001-candidate.md"),
+    )
+    .unwrap();
+    assert!(brief.contains("A moonlit library."));
+    assert!(brief.contains("## Visible action"));
+}
+
+#[test]
+fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- layout: full-page -->\nEdgar opens the book.\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let build = Command::new(binary)
+        .args(["--root", directory.path().to_str().unwrap(), "build"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let list = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "list",
+            "--story",
+            "story",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let list = String::from_utf8(list.stdout).unwrap();
+    assert!(list.contains("\"command\": \"art list\""));
+    assert!(list.contains("\"art_id\": \"reveal\""));
+    assert!(list.contains("\"candidate_briefs\""));
+
+    let inspect = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "inspect",
+            "reveal",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let brief = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "brief",
+            "reveal",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        brief.status.success(),
+        "{}",
+        String::from_utf8_lossy(&brief.stderr)
+    );
+    assert!(String::from_utf8(brief.stdout)
+        .unwrap()
+        .contains("v001-candidate.md"));
+
+    let approve = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "approve",
+            "reveal",
+            "v001",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        approve.status.success(),
+        "{}",
+        String::from_utf8_lossy(&approve.stderr)
+    );
+    assert!(directory
+        .path()
+        .join(".compositor/briefs/reveal/v001-candidate.md")
+        .is_file());
+    assert!(directory
+        .path()
+        .join(".compositor/briefs/reveal/v001-approved.md")
+        .is_file());
+
+    fs::create_dir_all(directory.path().join("assets/approved")).unwrap();
+    fs::write(
+        directory.path().join("assets/approved/reveal.png"),
+        b"not-an-image",
+    )
+    .unwrap();
+    let attach = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "attach",
+            "reveal",
+            "assets/approved/reveal.png",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        attach.status.success(),
+        "{}",
+        String::from_utf8_lossy(&attach.stderr)
+    );
+    let proof = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "proof",
+            "--story",
+            "story",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        proof.status.success(),
+        "{}",
+        String::from_utf8_lossy(&proof.stderr)
+    );
+    assert!(
+        fs::read_to_string(directory.path().join("output/proofs/story.html"))
+            .unwrap()
+            .contains("../../assets/approved/reveal.png")
+    );
+
+    let removed_attach = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "attach-art",
+            "reveal",
+            "assets/approved/reveal.png",
+        ])
+        .output()
+        .unwrap();
+    assert!(!removed_attach.status.success());
+    let removed_inspect = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "inspect",
+            "art",
+            "reveal",
+        ])
+        .output()
+        .unwrap();
+    assert!(!removed_inspect.status.success());
+    let removed_approve = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "approve",
+            "brief",
+            "reveal",
+            "v001",
+        ])
+        .output()
+        .unwrap();
+    assert!(!removed_approve.status.success());
+}
+
+#[test]
+fn plan_diff_writes_a_visual_review_artifact() {
+    let directory = project();
+    replace_story_with_units(&directory, &[60, 60, 60]);
+    let initial = Config::load(directory.path()).unwrap();
+    build::build(directory.path(), &initial, None).unwrap();
+    let tighter = pagination_config(&directory, 90, 100);
+    build::build(directory.path(), &tighter, None).unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let result = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "diff",
+            "plan",
+            "story",
+            "v001",
+            "v002",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(directory
+        .path()
+        .join("output/reports/story-v001-v002-plan-diff.html")
+        .is_file());
 }
 
 #[test]

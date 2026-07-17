@@ -1,3 +1,4 @@
+use crate::art;
 use crate::config::Config;
 use crate::discovery::discover;
 use crate::identity::{resolve_project, ResolvedStory};
@@ -19,12 +20,22 @@ pub struct PreparedBuild {
     pub previous: Option<Manifest>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildMode {
+    Conservative,
+    Rebalance,
+    Fresh,
+}
+
 pub fn prepare(root: &Path, config: &Config) -> Result<PreparedBuild, AppError> {
     let project = discover(root, config)?;
-    let validation = validate(&project);
+    let mut validation = validate(&project);
     let previous = load_manifest(root, config)?;
     let resolutions = load_resolutions(root, config)?;
     let (resolved, changes) = resolve_project(&project, previous.as_ref(), &resolutions, config);
+    validation
+        .issues
+        .extend(crate::validation::validate_changes(&changes, previous.as_ref()).issues);
     Ok(PreparedBuild {
         project,
         resolved,
@@ -38,6 +49,15 @@ pub fn build(
     root: &Path,
     config: &Config,
     story_filter: Option<&str>,
+) -> Result<(PreparedBuild, Option<Manifest>, Vec<PagePlan>), AppError> {
+    build_with_mode(root, config, story_filter, BuildMode::Conservative)
+}
+
+pub fn build_with_mode(
+    root: &Path,
+    config: &Config,
+    story_filter: Option<&str>,
+    mode: BuildMode,
 ) -> Result<(PreparedBuild, Option<Manifest>, Vec<PagePlan>), AppError> {
     let prepared = prepare(root, config)?;
     if !prepared.validation.can_proceed() {
@@ -61,6 +81,7 @@ pub fn build(
         let manifest = make_manifest(
             &prepared.project,
             &prepared.resolved,
+            prepared.previous.as_ref(),
             prepared
                 .previous
                 .as_ref()
@@ -87,8 +108,10 @@ pub fn build(
                     story,
                     &prepared.resolved[&story.id],
                     manifest_revision,
+                    mode == BuildMode::Conservative,
                 )?;
                 storage::save_plan(root, config, &plan)?;
+                art::sync_requirements(root, config, story, &prepared.resolved[&story.id], &plan)?;
                 plans.push(plan);
             }
         }

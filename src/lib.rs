@@ -1,5 +1,6 @@
 pub const BUILD_VERSION: &str = env!("COMPOSITOR_BUILD_VERSION");
 
+pub mod art;
 pub mod build;
 pub mod cli;
 pub mod config;

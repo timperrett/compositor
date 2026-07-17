@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::identity::ResolvedStory;
-use crate::model::{PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION};
+use crate::model::{
+    ArtifactStatus, PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION,
+};
 use crate::storage;
 use crate::AppError;
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub fn make_plan(
@@ -13,11 +15,41 @@ pub fn make_plan(
     story: &Story,
     resolved: &ResolvedStory,
     manifest_revision: u64,
+    preserve_assignments: bool,
 ) -> Result<PagePlan, AppError> {
     let previous = storage::load_latest_plan(root, config, &story.id)?;
     let fingerprint = config.pagination_fingerprint();
     let mut warnings = Vec::new();
-    let assignments = fresh_assignments(story, resolved, config, &mut warnings);
+    let mut assignments = if preserve_assignments
+        && previous
+            .as_ref()
+            .is_some_and(|plan| plan.pagination_fingerprint == fingerprint)
+    {
+        let previous = previous.as_ref().expect("checked above");
+        let (mut retained, assigned) = retained_assignments(previous, story, resolved);
+        if !retained.is_empty() {
+            warnings.push("conservative planning retained unchanged page assignments; changed units were planned after the retained pages".into());
+        }
+        let next_page = retained
+            .iter()
+            .flat_map(|assignment| assignment.pages.iter())
+            .max()
+            .copied()
+            .unwrap_or(0)
+            + 1;
+        retained.extend(fresh_assignments_from(
+            story,
+            resolved,
+            config,
+            next_page,
+            &assigned,
+            &mut warnings,
+        ));
+        retained
+    } else {
+        fresh_assignments(story, resolved, config, &mut warnings)
+    };
+    attach_art_ids(&mut assignments, story, resolved, &mut warnings);
     let revision = previous.map(|plan| plan.revision + 1).unwrap_or(1);
     Ok(PagePlan {
         schema_version: SCHEMA_VERSION,
@@ -25,9 +57,46 @@ pub fn make_plan(
         manifest_revision,
         revision,
         pagination_fingerprint: fingerprint,
+        status: ArtifactStatus::Candidate,
         assignments,
         warnings,
     })
+}
+
+fn retained_assignments(
+    previous: &PagePlan,
+    story: &Story,
+    resolved: &ResolvedStory,
+) -> (Vec<PageAssignment>, BTreeSet<String>) {
+    let layouts = story
+        .units
+        .iter()
+        .zip(&resolved.ids)
+        .map(|(unit, id)| (id.as_str(), layout_for(unit)))
+        .collect::<BTreeMap<_, _>>();
+    let stable = resolved
+        .changes
+        .iter()
+        .filter(|change| matches!(change.kind, crate::model::ChangeKind::Unchanged))
+        .filter_map(|change| change.unit_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let mut assigned = BTreeSet::new();
+    let assignments = previous
+        .assignments
+        .iter()
+        .filter(|assignment| {
+            !assignment.units.is_empty()
+                && assignment.units.iter().all(|id| {
+                    stable.contains(id.as_str())
+                        && layouts
+                            .get(id.as_str())
+                            .is_some_and(|layout| *layout == assignment.layout)
+                })
+        })
+        .cloned()
+        .inspect(|assignment| assigned.extend(assignment.units.iter().cloned()))
+        .collect();
+    (assignments, assigned)
 }
 
 fn fresh_assignments(
@@ -36,7 +105,17 @@ fn fresh_assignments(
     config: &Config,
     warnings: &mut Vec<String>,
 ) -> Vec<PageAssignment> {
-    let mut next_page = 1;
+    fresh_assignments_from(story, resolved, config, 1, &BTreeSet::new(), warnings)
+}
+
+fn fresh_assignments_from(
+    story: &Story,
+    resolved: &ResolvedStory,
+    config: &Config,
+    mut next_page: u32,
+    assigned_ids: &BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) -> Vec<PageAssignment> {
     let mut assignments = Vec::new();
     let mut text_fragments = Vec::new();
     let mut text_words = 0;
@@ -57,6 +136,9 @@ fn fresh_assignments(
     };
 
     for (unit, id) in story.units.iter().zip(&resolved.ids) {
+        if assigned_ids.contains(id) {
+            continue;
+        }
         let layout = layout_for(unit);
         if layout != "text-dominant" {
             if keep_with_next {
@@ -83,6 +165,7 @@ fn fresh_assignments(
                 fragments: vec![whole_unit_fragment(id, unit)],
                 layout: layout.into(),
                 word_count: unit.word_count,
+                art_id: None,
             });
             continue;
         }
@@ -264,7 +347,53 @@ fn text_assignment(page: u32, fragments: Vec<PageFragment>, word_count: usize) -
         fragments,
         layout: "text-dominant".into(),
         word_count,
+        art_id: None,
     }
+}
+
+fn attach_art_ids(
+    assignments: &mut [PageAssignment],
+    story: &Story,
+    resolved: &ResolvedStory,
+    warnings: &mut Vec<String>,
+) {
+    for assignment in assignments {
+        let matching = assignment
+            .units
+            .iter()
+            .filter_map(|id| {
+                story
+                    .units
+                    .iter()
+                    .zip(&resolved.ids)
+                    .find(|(_, resolved_id)| *resolved_id == id)
+                    .and_then(|(unit, _)| art_needed(unit).then(|| id.clone()))
+            })
+            .collect::<Vec<_>>();
+        if let Some(art_id) = matching.first() {
+            assignment.art_id = Some(art_id.clone());
+        }
+        if matching.len() > 1 {
+            warnings.push(format!(
+                "page {:?} contains multiple artwork requirements ({}); each remains tracked separately",
+                assignment.pages,
+                matching.join(", ")
+            ));
+        }
+    }
+}
+
+pub fn art_needed(unit: &Unit) -> bool {
+    unit.directives.art.is_some()
+        || matches!(
+            layout_for(unit),
+            "art-dominant"
+                | "full-page"
+                | "full-spread"
+                | "facing-art"
+                | "spot-art"
+                | "illustration-only"
+        )
 }
 
 fn should_break_before(current: usize, incoming: usize, target: usize, maximum: usize) -> bool {

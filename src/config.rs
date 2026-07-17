@@ -15,6 +15,7 @@ pub struct Config {
     pub ordering: OrderingConfig,
     pub markdown: MarkdownConfig,
     pub build: BuildConfig,
+    pub book: BookConfig,
     pub pagination: PaginationConfig,
 }
 
@@ -61,6 +62,14 @@ pub struct BuildConfig {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct BookConfig {
+    pub trim_width_in: f64,
+    pub trim_height_in: f64,
+    pub orientation: String,
+    pub bleed_in: f64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaginationConfig {
     pub target_words_per_text_page: usize,
     pub maximum_words_per_text_page: usize,
@@ -78,6 +87,7 @@ impl Default for Config {
             ordering: OrderingConfig::default(),
             markdown: MarkdownConfig::default(),
             build: BuildConfig::default(),
+            book: BookConfig::default(),
             pagination: PaginationConfig::default(),
         }
     }
@@ -137,6 +147,16 @@ impl Default for BuildConfig {
         }
     }
 }
+impl Default for BookConfig {
+    fn default() -> Self {
+        Self {
+            trim_width_in: 8.0,
+            trim_height_in: 10.0,
+            orientation: "portrait".into(),
+            bleed_in: 0.125,
+        }
+    }
+}
 impl Default for PaginationConfig {
     fn default() -> Self {
         Self {
@@ -154,7 +174,7 @@ impl Config {
             .map_err(|_| AppError::Config(format!("missing configuration: {}", path.display())))?;
         let value: Self =
             toml::from_str(&text).map_err(|error| AppError::Config(error.to_string()))?;
-        if value.schema_version != 1 {
+        if value.schema_version != crate::model::SCHEMA_VERSION {
             return Err(AppError::Config(format!(
                 "unsupported schema_version {}",
                 value.schema_version
@@ -181,6 +201,19 @@ impl Config {
                 "pagination.target_words_per_text_page must not exceed pagination.maximum_words_per_text_page".into(),
             ));
         }
+        if self.book.trim_width_in <= 0.0
+            || self.book.trim_height_in <= 0.0
+            || self.book.bleed_in < 0.0
+        {
+            return Err(AppError::Config(
+                "book dimensions must be positive and bleed must not be negative".into(),
+            ));
+        }
+        if !matches!(self.book.orientation.as_str(), "portrait" | "landscape") {
+            return Err(AppError::Config(
+                "book.orientation must be `portrait` or `landscape`".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -205,7 +238,7 @@ impl Config {
     }
 }
 
-pub const DEFAULT_CONFIG: &str = r#"schema_version = 1
+pub const DEFAULT_CONFIG: &str = r#"schema_version = 2
 
 [source]
 compendiums_dir = "compendiums"
@@ -233,6 +266,12 @@ require_anchor_before_approval = true
 [build]
 default_mode = "conservative"
 similarity_threshold = 0.82
+
+[book]
+trim_width_in = 8.0
+trim_height_in = 10.0
+orientation = "portrait"
+bleed_in = 0.125
 
 [pagination]
 target_words_per_text_page = 90
