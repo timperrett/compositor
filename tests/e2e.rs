@@ -65,6 +65,22 @@ fn replace_story_with_units(directory: &tempfile::TempDir, unit_words: &[usize])
     .unwrap();
 }
 
+fn replace_story_with_text(directory: &tempfile::TempDir, text: &str) {
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story.md"),
+        format!("---\nid: story\ntitle: Story\n---\n<!-- anchor: unit-0 -->\n{text}\n"),
+    )
+    .unwrap();
+}
+
+fn sentence(count: usize) -> String {
+    let mut values = (0..count.saturating_sub(1))
+        .map(|_| "word")
+        .collect::<Vec<_>>();
+    values.push("sentence.");
+    values.join(" ")
+}
+
 fn pagination_config(directory: &tempfile::TempDir, target: usize, maximum: usize) -> Config {
     let path = directory.path().join("compositor.toml");
     let updated = fs::read_to_string(&path)
@@ -179,6 +195,63 @@ fn target_words_per_page_changes_text_page_packing() {
     assert_eq!(plans[0].revision, 2);
     assert_eq!(plans[0].assignments.len(), 1);
     assert_eq!(plans[0].assignments[0].word_count, 120);
+}
+
+#[test]
+fn oversized_unit_is_split_into_target_sized_page_fragments() {
+    let directory = project();
+    replace_story_with_text(
+        &directory,
+        &[sentence(38), sentence(40), sentence(40), sentence(17)].join("\n\n"),
+    );
+    let config = pagination_config(&directory, 40, 90);
+    let (_, manifest, plans) = build::build(directory.path(), &config, None).unwrap();
+    let plan = &plans[0];
+    assert_eq!(manifest.unwrap().revision, 1);
+    assert_eq!(
+        plan.assignments
+            .iter()
+            .map(|assignment| assignment.word_count)
+            .collect::<Vec<_>>(),
+        vec![38, 40, 40, 17]
+    );
+    assert!(plan
+        .assignments
+        .iter()
+        .all(|assignment| assignment.word_count <= 40));
+    assert_eq!(plan.assignments[0].fragments[0].start_word, 0);
+    assert_eq!(plan.assignments[0].fragments[0].end_word, 38);
+    assert_eq!(plan.assignments[3].fragments[0].start_word, 118);
+    assert_eq!(plan.assignments[3].fragments[0].end_word, 135);
+    assert!(plan.warnings.is_empty());
+}
+
+#[test]
+fn sentence_boundary_prevents_a_dangling_word_page() {
+    let directory = project();
+    replace_story_with_text(&directory, &sentence(41));
+    let config = pagination_config(&directory, 40, 90);
+    let (_, _, plans) = build::build(directory.path(), &config, None).unwrap();
+    assert_eq!(plans[0].assignments.len(), 1);
+    assert_eq!(plans[0].assignments[0].word_count, 41);
+    assert_eq!(plans[0].assignments[0].fragments[0].end_word, 41);
+}
+
+#[test]
+fn overlong_sentence_uses_the_maximum_as_a_last_resort() {
+    let directory = project();
+    replace_story_with_text(&directory, &words(95));
+    let config = pagination_config(&directory, 40, 90);
+    let (_, _, plans) = build::build(directory.path(), &config, None).unwrap();
+    assert_eq!(
+        plans[0]
+            .assignments
+            .iter()
+            .map(|assignment| assignment.word_count)
+            .collect::<Vec<_>>(),
+        vec![90, 5]
+    );
+    assert!(plans[0].warnings[0].contains("no sentence or paragraph boundary"));
 }
 
 #[test]

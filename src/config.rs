@@ -190,7 +190,7 @@ impl Config {
     pub fn pagination_fingerprint(&self) -> String {
         let pagination = &self.pagination;
         let input = format!(
-            "pagination-v1\ntarget={}\nmaximum={}\nrecto={}",
+            "pagination-v3\ntarget={}\nmaximum={}\nrecto={}",
             pagination.target_words_per_text_page,
             pagination.maximum_words_per_text_page,
             pagination.story_starts_on_recto,

@@ -268,9 +268,13 @@ identity match that Compositor could not determine automatically.
 ## Pagination capacity
 
 The `[pagination]` settings in `compositor.toml` determine text-page packing.
-`target_words_per_text_page` is the preferred density and
-`maximum_words_per_text_page` is a hard cap where the planner can break between
-units. A change to either setting (or the recto setting) creates a new page-plan
+`target_words_per_text_page` is the preferred density; long text units are
+automatically split at the nearest paragraph or sentence boundary within the
+maximum. A word-boundary split is used only when a single sentence exceeds the
+maximum.
+`maximum_words_per_text_page` is the hard cap when combining fragments or
+units (except an explicit `keep-with-next` constraint, which emits a warning).
+A change to either setting (or the recto setting) creates a new page-plan
 revision on the next build without rewriting an unchanged source manifest.
 "#;
 

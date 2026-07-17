@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::identity::ResolvedStory;
-use crate::model::{PageAssignment, PagePlan, Story, Unit, SCHEMA_VERSION};
+use crate::model::{PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION};
 use crate::storage;
 use crate::AppError;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 pub fn make_plan(
@@ -15,26 +16,8 @@ pub fn make_plan(
 ) -> Result<PagePlan, AppError> {
     let previous = storage::load_latest_plan(root, config, &story.id)?;
     let fingerprint = config.pagination_fingerprint();
-    let rebuild_for_config = previous
-        .as_ref()
-        .is_none_or(|plan| plan.pagination_fingerprint != fingerprint);
-    let mut warnings = overflow_warnings(story, resolved, config);
-    let assignments = if rebuild_for_config {
-        fresh_assignments(story, resolved, config, 1, &BTreeSet::new(), &mut warnings)
-    } else {
-        let previous = previous.as_ref().expect("checked above");
-        let (mut retained, assigned_ids) = retained_assignments(previous, story, resolved);
-        let next_page = next_page_after(&retained, config);
-        retained.extend(fresh_assignments(
-            story,
-            resolved,
-            config,
-            next_page,
-            &assigned_ids,
-            &mut warnings,
-        ));
-        retained
-    };
+    let mut warnings = Vec::new();
+    let assignments = fresh_assignments(story, resolved, config, &mut warnings);
     let revision = previous.map(|plan| plan.revision + 1).unwrap_or(1);
     Ok(PagePlan {
         schema_version: SCHEMA_VERSION,
@@ -47,85 +30,48 @@ pub fn make_plan(
     })
 }
 
-fn retained_assignments(
-    previous: &PagePlan,
-    story: &Story,
-    resolved: &ResolvedStory,
-) -> (Vec<PageAssignment>, BTreeSet<String>) {
-    let source = story
-        .units
-        .iter()
-        .zip(&resolved.ids)
-        .map(|(unit, id)| (id.as_str(), unit))
-        .collect::<BTreeMap<_, _>>();
-    let mut retained_ids = BTreeSet::new();
-    let assignments = previous
-        .assignments
-        .iter()
-        .filter_map(|assignment| {
-            let units = assignment
-                .units
-                .iter()
-                .filter(|id| source.contains_key(id.as_str()))
-                .cloned()
-                .collect::<Vec<_>>();
-            if units.is_empty()
-                || units.iter().any(|id| {
-                    source
-                        .get(id.as_str())
-                        .is_none_or(|unit| layout_for(unit) != assignment.layout)
-                })
-            {
-                return None;
-            }
-            retained_ids.extend(units.iter().cloned());
-            Some(PageAssignment {
-                pages: assignment.pages.clone(),
-                word_count: units
-                    .iter()
-                    .filter_map(|id| source.get(id.as_str()))
-                    .map(|unit| unit.word_count)
-                    .sum(),
-                units,
-                layout: assignment.layout.clone(),
-            })
-        })
-        .collect();
-    (assignments, retained_ids)
-}
-
 fn fresh_assignments(
     story: &Story,
     resolved: &ResolvedStory,
     config: &Config,
-    mut next_page: u32,
-    assigned_ids: &BTreeSet<String>,
     warnings: &mut Vec<String>,
 ) -> Vec<PageAssignment> {
-    if config.pagination.story_starts_on_recto && next_page.is_multiple_of(2) {
-        next_page += 1;
-    }
+    let mut next_page = 1;
     let mut assignments = Vec::new();
-    let mut text_units = Vec::new();
+    let mut text_fragments = Vec::new();
     let mut text_words = 0;
+    let mut keep_with_next = false;
 
-    let candidates = story
-        .units
-        .iter()
-        .zip(&resolved.ids)
-        .filter(|(_, id)| !assigned_ids.contains(*id))
-        .collect::<Vec<_>>();
-    let mut index = 0;
-    while index < candidates.len() {
-        let (unit, id) = candidates[index];
-        if layout_for(unit) != "text-dominant" {
+    let flush_text = |assignments: &mut Vec<PageAssignment>,
+                      next_page: &mut u32,
+                      fragments: &mut Vec<PageFragment>,
+                      words: &mut usize| {
+        if !fragments.is_empty() {
+            assignments.push(text_assignment(
+                *next_page,
+                std::mem::take(fragments),
+                std::mem::take(words),
+            ));
+            *next_page += 1;
+        }
+    };
+
+    for (unit, id) in story.units.iter().zip(&resolved.ids) {
+        let layout = layout_for(unit);
+        if layout != "text-dominant" {
+            if keep_with_next {
+                warnings.push(format!(
+                    "unit {id} requests keep-with-next, but the following unit has layout `{layout}`"
+                ));
+                keep_with_next = false;
+            }
             flush_text(
                 &mut assignments,
                 &mut next_page,
-                &mut text_units,
+                &mut text_fragments,
                 &mut text_words,
             );
-            let pages = if layout_for(unit) == "full-spread" {
+            let pages = if layout == "full-spread" {
                 vec![next_page, next_page + 1]
             } else {
                 vec![next_page]
@@ -134,86 +80,190 @@ fn fresh_assignments(
             assignments.push(PageAssignment {
                 pages,
                 units: vec![id.clone()],
-                layout: layout_for(unit).into(),
+                fragments: vec![whole_unit_fragment(id, unit)],
+                layout: layout.into(),
                 word_count: unit.word_count,
             });
-            index += 1;
             continue;
         }
 
-        let mut block = vec![(unit, id)];
-        while block
-            .last()
-            .is_some_and(|(last, _)| last.directives.keep_with_next)
-            && index + block.len() < candidates.len()
-        {
-            let (next_unit, next_id) = candidates[index + block.len()];
-            if layout_for(next_unit) != "text-dominant" {
-                warnings.push(format!(
-                    "unit {} requests keep-with-next, but the following unit has layout `{}`",
-                    block.last().expect("non-empty").1,
-                    layout_for(next_unit)
-                ));
-                break;
+        let fragments = text_fragments_for(
+            unit,
+            id,
+            config.pagination.target_words_per_text_page,
+            config.pagination.maximum_words_per_text_page,
+            warnings,
+        );
+        for fragment in fragments {
+            let fragment_words = fragment.end_word - fragment.start_word;
+            if !text_fragments.is_empty()
+                && !keep_with_next
+                && should_break_before(
+                    text_words,
+                    fragment_words,
+                    config.pagination.target_words_per_text_page,
+                    config.pagination.maximum_words_per_text_page,
+                )
+            {
+                flush_text(
+                    &mut assignments,
+                    &mut next_page,
+                    &mut text_fragments,
+                    &mut text_words,
+                );
             }
-            block.push((next_unit, next_id));
+            if !text_fragments.is_empty()
+                && keep_with_next
+                && text_words + fragment_words > config.pagination.maximum_words_per_text_page
+            {
+                warnings.push(format!(
+                    "keep-with-next forces unit {id} beyond the {}-word maximum",
+                    config.pagination.maximum_words_per_text_page
+                ));
+            }
+            text_words += fragment_words;
+            text_fragments.push(fragment);
+            keep_with_next = false;
         }
-        let block_len = block.len();
-        let block_words = block.iter().map(|(unit, _)| unit.word_count).sum::<usize>();
-        if block_words > config.pagination.maximum_words_per_text_page && block.len() > 1 {
-            warnings.push(format!(
-                "units {} must remain together and total {} words, exceeding the {}-word maximum",
-                block
-                    .iter()
-                    .map(|(_, id)| id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                block_words,
-                config.pagination.maximum_words_per_text_page
-            ));
-        }
-        if !text_units.is_empty()
-            && should_break_before(
-                text_words,
-                block_words,
-                config.pagination.target_words_per_text_page,
-                config.pagination.maximum_words_per_text_page,
-            )
-        {
-            flush_text(
-                &mut assignments,
-                &mut next_page,
-                &mut text_units,
-                &mut text_words,
-            );
-        }
-        text_words += block_words;
-        text_units.extend(block.into_iter().map(|(_, id)| id.clone()));
-        index += block_len;
+        keep_with_next = unit.directives.keep_with_next;
     }
     flush_text(
         &mut assignments,
         &mut next_page,
-        &mut text_units,
+        &mut text_fragments,
         &mut text_words,
     );
     assignments
 }
 
-fn flush_text(
-    assignments: &mut Vec<PageAssignment>,
-    next_page: &mut u32,
-    text_units: &mut Vec<String>,
-    text_words: &mut usize,
-) {
-    if !text_units.is_empty() {
-        assignments.push(PageAssignment {
-            pages: vec![*next_page],
-            units: std::mem::take(text_units),
-            layout: "text-dominant".into(),
-            word_count: std::mem::take(text_words),
+fn text_fragments_for(
+    unit: &Unit,
+    id: &str,
+    target: usize,
+    maximum: usize,
+    warnings: &mut Vec<String>,
+) -> Vec<PageFragment> {
+    if unit.word_count == 0 {
+        return vec![whole_unit_fragment(id, unit)];
+    }
+    let boundaries = semantic_boundaries(&unit.content);
+    let mut fragments = Vec::new();
+    let mut start_word = 0;
+    while start_word < unit.word_count {
+        let maximum_end = (start_word + maximum).min(unit.word_count);
+        let target_end = (start_word + target).min(unit.word_count);
+        let end_word = boundaries
+            .iter()
+            .filter(|boundary| boundary.word_index > start_word && boundary.word_index <= maximum_end)
+            .min_by_key(|boundary| {
+                (
+                    boundary.word_index.abs_diff(target_end),
+                    Reverse(boundary.strength),
+                )
+            })
+            .map(|boundary| boundary.word_index)
+            .unwrap_or_else(|| {
+                if maximum_end < unit.word_count {
+                    warnings.push(format!(
+                        "unit {id} has no sentence or paragraph boundary within the {maximum}-word maximum; splitting at word {maximum_end}"
+                    ));
+                }
+                maximum_end
+            });
+        fragments.push(PageFragment {
+            unit_id: id.into(),
+            start_word,
+            end_word,
         });
-        *next_page += 1;
+        start_word = end_word;
+    }
+    fragments
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BoundaryStrength {
+    Sentence,
+    Paragraph,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SemanticBoundary {
+    word_index: usize,
+    strength: BoundaryStrength,
+}
+
+fn semantic_boundaries(value: &str) -> Vec<SemanticBoundary> {
+    let visible = crate::markdown::strip_directives(value);
+    let mut boundaries = Vec::new();
+    let mut word_index = 0;
+    let mut paragraph_end = None;
+    for line in visible.lines() {
+        if line.trim().is_empty() {
+            if let Some(end) = paragraph_end.take() {
+                promote_to_paragraph(&mut boundaries, end);
+            }
+            continue;
+        }
+        for word in line.split_whitespace() {
+            word_index += 1;
+            paragraph_end = Some(word_index);
+            if ends_sentence(word) {
+                boundaries.push(SemanticBoundary {
+                    word_index,
+                    strength: BoundaryStrength::Sentence,
+                });
+            }
+        }
+    }
+    if let Some(end) = paragraph_end {
+        promote_to_paragraph(&mut boundaries, end);
+    }
+    boundaries
+}
+
+fn promote_to_paragraph(boundaries: &mut Vec<SemanticBoundary>, word_index: usize) {
+    if let Some(boundary) = boundaries
+        .iter_mut()
+        .rev()
+        .find(|boundary| boundary.word_index == word_index)
+    {
+        boundary.strength = BoundaryStrength::Paragraph;
+    } else {
+        boundaries.push(SemanticBoundary {
+            word_index,
+            strength: BoundaryStrength::Paragraph,
+        });
+    }
+}
+
+fn ends_sentence(word: &str) -> bool {
+    let trimmed = word.trim_end_matches(|character: char| {
+        matches!(character, '"' | '\'' | ')' | ']' | '}' | '*' | '_')
+    });
+    matches!(trimmed.chars().last(), Some('.' | '!' | '?'))
+}
+
+fn whole_unit_fragment(id: &str, unit: &Unit) -> PageFragment {
+    PageFragment {
+        unit_id: id.into(),
+        start_word: 0,
+        end_word: unit.word_count,
+    }
+}
+
+fn text_assignment(page: u32, fragments: Vec<PageFragment>, word_count: usize) -> PageAssignment {
+    let mut seen = BTreeSet::new();
+    let units = fragments
+        .iter()
+        .filter(|fragment| seen.insert(fragment.unit_id.clone()))
+        .map(|fragment| fragment.unit_id.clone())
+        .collect();
+    PageAssignment {
+        pages: vec![page],
+        units,
+        fragments,
+        layout: "text-dominant".into(),
+        word_count,
     }
 }
 
@@ -223,39 +273,6 @@ fn should_break_before(current: usize, incoming: usize, target: usize, maximum: 
         return true;
     }
     proposed > target && proposed - target > target - current
-}
-
-fn overflow_warnings(story: &Story, resolved: &ResolvedStory, config: &Config) -> Vec<String> {
-    story
-        .units
-        .iter()
-        .zip(&resolved.ids)
-        .filter(|(unit, _)| {
-            layout_for(unit) == "text-dominant"
-                && unit.word_count > config.pagination.maximum_words_per_text_page
-        })
-        .map(|(unit, id)| {
-            format!(
-                "unit {id} has {} words, exceeding the {}-word maximum",
-                unit.word_count, config.pagination.maximum_words_per_text_page
-            )
-        })
-        .collect()
-}
-
-fn next_page_after(assignments: &[PageAssignment], config: &Config) -> u32 {
-    let next_page = assignments
-        .iter()
-        .flat_map(|assignment| assignment.pages.iter())
-        .max()
-        .copied()
-        .unwrap_or(0)
-        + 1;
-    if config.pagination.story_starts_on_recto && next_page.is_multiple_of(2) {
-        next_page + 1
-    } else {
-        next_page
-    }
 }
 
 fn layout_for(unit: &Unit) -> &str {

@@ -190,8 +190,23 @@ pub struct PagePlan {
 pub struct PageAssignment {
     pub pages: Vec<u32>,
     pub units: Vec<String>,
+    /// Word ranges for text units that continue across page assignments. Empty
+    /// on plans written before fragment support, where each listed unit is
+    /// rendered in full.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fragments: Vec<PageFragment>,
     pub layout: String,
     pub word_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageFragment {
+    pub unit_id: String,
+    /// Zero-based, exclusive word range within the directive-stripped source
+    /// unit. These offsets keep unit identity stable while allowing prose to
+    /// flow over multiple planned pages.
+    pub start_word: usize,
+    pub end_word: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
