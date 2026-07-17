@@ -752,7 +752,6 @@ The first version may support approval through CLI commands:
 
 ```bash
 compositor approve plan golden-book-of-kindness v003
-compositor approve brief golden-book-reveal v002
 compositor approve layout seven-books-of-magic v005
 ```
 
@@ -847,27 +846,19 @@ Example:
 }
 ```
 
-### 17.3 Generated art briefs
+### 17.3 Skill-authored art records
 
-Rich art briefs should be stored outside the manuscript:
+Rich art records are human- and skill-authored YAML outside the manuscript and
+generated state:
 
 ```text
-.compositor/briefs/golden-book-reveal/v001.md
+art/briefs/golden-book-reveal.yaml
 ```
 
-A brief may contain:
-
-* narrative purpose;
-* visible action;
-* characters;
-* location;
-* composition;
-* text-safe region;
-* gutter constraints;
-* continuity references;
-* style references;
-* revision notes;
-* technical output requirements.
+Each record follows the versioned art-brief protocol and may contain the
+generation prompt, context references, candidates, feedback, and selection.
+Compositor validates it against the current illustration requirement but never
+generates a placeholder or rewrites its creative content.
 
 ### 17.4 Artwork relationships
 
@@ -1443,7 +1434,7 @@ Version `0.1` does not need:
 
 * richer page-plan constraints;
 * generated illustration requirement records;
-* Markdown art-brief management;
+* art-brief protocol validation;
 * compendium-wide proof assembly;
 * continuity metadata;
 * page-plan visual diff;

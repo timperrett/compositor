@@ -1,0 +1,11 @@
+schema_version: 1
+art_id: golden-book-reveal
+source:
+  story_id: golden-book-of-kindness
+  unit_ids: [golden-book-reveal]
+  requirement_revision: 1
+generation:
+  mode: exploration
+  prompt: >
+    Edgar discovers a golden book in a moonlit library. Explore a warm,
+    curious picture-book moment with room for text.

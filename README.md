@@ -28,3 +28,13 @@ Generated state lives in `.compositor/`; HTML proofs are written to
 on every successful build. Both story-level and compendium-level `.txt` files
 are fully generated for import into a layout application. Normal commands never
 modify source Markdown or assets.
+
+## Artwork records
+
+Artwork intent, generation prompts, candidates, feedback, and selections live
+in human- and skill-authored YAML files at `art/briefs/<art-id>.yaml`.
+Compositor validates these records against the current illustration requirement
+but does not generate or revise them. See `docs/art-protocol.md` for the v1
+format and complete examples. Use `compositor art validate --strict` before
+generation or promotion, and `compositor art attach <art-id> --selected` to
+copy the selected draft candidate into `assets/approved/`.

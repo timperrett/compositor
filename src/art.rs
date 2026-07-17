@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-/// Synchronize requirement records and deterministic candidate brief templates
-/// from a newly-created plan. Existing brief revisions are never overwritten.
+/// Synchronize illustration requirements from a newly-created plan. Art briefs
+/// are external, skill-authored protocol records in `art/briefs/`.
 pub fn sync_requirements(
     root: &Path,
     config: &Config,
@@ -61,39 +61,9 @@ pub fn sync_requirements(
             art_note: unit.directives.art.clone(),
         };
         storage::save_requirement(root, config, &record)?;
-        create_candidate_brief(root, config, &record)?;
         requirements.push(record);
     }
     Ok(requirements)
-}
-
-pub fn create_candidate_brief(
-    root: &Path,
-    config: &Config,
-    requirement: &IllustrationRequirement,
-) -> Result<(), AppError> {
-    let directory = storage::brief_directory(root, config, &requirement.art_id);
-    fs::create_dir_all(&directory)?;
-    let path = directory.join(format!("v{:03}-candidate.md", requirement.revision));
-    if path.exists() {
-        return Ok(());
-    }
-    let note = requirement
-        .art_note
-        .as_deref()
-        .unwrap_or("No authored art note provided.");
-    let text = format!(
-        "---\nart_id: {}\nstory_id: {}\nrequirement_revision: {}\nstatus: candidate\n---\n\n# Illustration brief: {}\n\n## Authored intent\n\n{}\n\n## Narrative purpose\n\n_TODO_\n\n## Visible action\n\n_TODO_\n\n## Characters and location\n\n_TODO_\n\n## Composition and text-safe region\n\nLayout: `{}` on pages {:?}.\n\n_TODO_\n\n## Continuity and technical requirements\n\n_TODO_\n",
-        requirement.art_id,
-        requirement.story_id,
-        requirement.revision,
-        requirement.art_id,
-        note,
-        requirement.layout,
-        requirement.pages,
-    );
-    fs::write(path, text)?;
-    Ok(())
 }
 
 pub fn requirements_for_story(

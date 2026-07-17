@@ -199,10 +199,6 @@ pub fn save_requirement(
     )
 }
 
-pub fn brief_directory(root: &Path, config: &Config, art_id: &str) -> PathBuf {
-    config.state_dir(root).join("briefs").join(art_id)
-}
-
 pub fn artifact_index_path(root: &Path, config: &Config, kind: &str, id: &str) -> PathBuf {
     config
         .state_dir(root)
@@ -232,32 +228,6 @@ pub fn save_artifact_index(
     index: &ArtifactIndex,
 ) -> Result<(), AppError> {
     write_json_atomic(&artifact_index_path(root, config, kind, id), index)
-}
-
-pub fn approve_brief(
-    root: &Path,
-    config: &Config,
-    art_id: &str,
-    revision: u64,
-) -> Result<String, AppError> {
-    let directory = brief_directory(root, config, art_id);
-    let candidate = directory.join(format!("v{revision:03}-candidate.md"));
-    if !candidate.is_file() {
-        return Err(AppError::Command(format!(
-            "no candidate brief {art_id} v{revision:03}"
-        )));
-    }
-    let file = format!("v{revision:03}-approved.md");
-    let text = fs::read_to_string(candidate)?;
-    write_text_atomic(&directory.join(&file), &text)?;
-    let mut index = load_artifact_index(root, config, "briefs", art_id)?;
-    if let Some(active) = index.active.replace(file.clone()) {
-        if !index.candidates.contains(&active) {
-            index.candidates.push(active);
-        }
-    }
-    save_artifact_index(root, config, "briefs", art_id, &index)?;
-    Ok(file)
 }
 
 pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), AppError> {

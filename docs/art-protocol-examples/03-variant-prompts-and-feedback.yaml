@@ -1,0 +1,17 @@
+schema_version: 1
+art_id: dragon-map-library-discovery
+source:
+  story_id: dragon-map-that-wasnt-there
+  unit_ids: [dragon-map-library-discovery]
+  requirement_revision: 1
+generation:
+  prompt: Edgar watches Lady Aster lower a dragon-carved box in the Royal Library.
+candidates:
+  - id: a
+    file: assets/drafts/dragon-map-library-discovery/r01/candidate-a.png
+  - id: b
+    file: assets/drafts/dragon-map-library-discovery/r01/candidate-b.png
+    prompt: Retain the scene but make Edgar smaller against the library shelves.
+selection:
+  candidate_id: a
+  feedback: Keep the scale and candlelight; make Edgar more curious in a later refinement.

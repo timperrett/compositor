@@ -225,7 +225,7 @@ fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
 }
 
 #[test]
-fn artwork_requirements_and_candidate_briefs_are_generated_from_art_notes_or_layouts() {
+fn artwork_requirements_are_generated_without_legacy_briefs() {
     let directory = project();
     fs::write(
         directory.path().join("compendiums/01-magic/01-story.md"),
@@ -243,18 +243,11 @@ fn artwork_requirements_and_candidate_briefs_are_generated_from_art_notes_or_lay
     .unwrap();
     assert_eq!(requirement.pages, vec![1, 2]);
     assert_eq!(requirement.art_note.as_deref(), Some("A moonlit library."));
-    let brief = fs::read_to_string(
-        directory
-            .path()
-            .join(".compositor/briefs/reveal/v001-candidate.md"),
-    )
-    .unwrap();
-    assert!(brief.contains("A moonlit library."));
-    assert!(brief.contains("## Visible action"));
+    assert!(!directory.path().join(".compositor/briefs").exists());
 }
 
 #[test]
-fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
+fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     let directory = project();
     fs::write(
         directory.path().join("compendiums/01-magic/01-story.md"),
@@ -270,6 +263,35 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
         build.status.success(),
         "{}",
         String::from_utf8_lossy(&build.stderr)
+    );
+    fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+    fs::create_dir_all(directory.path().join("assets/drafts/reveal/r01")).unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("assets/drafts/reveal/r01/candidate-a.png"),
+        b"not-an-image",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/reveal.yaml"),
+        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+    )
+    .unwrap();
+    let validate = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "validate",
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
     );
     let list = Command::new(binary)
         .args([
@@ -292,7 +314,8 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
     let list = String::from_utf8(list.stdout).unwrap();
     assert!(list.contains("\"command\": \"art list\""));
     assert!(list.contains("\"art_id\": \"reveal\""));
-    assert!(list.contains("\"candidate_briefs\""));
+    assert!(list.contains("\"art_brief\""));
+    assert!(list.contains("\"selected_candidate\": \"a\""));
 
     let inspect = Command::new(binary)
         .args([
@@ -328,39 +351,8 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
     );
     assert!(String::from_utf8(brief.stdout)
         .unwrap()
-        .contains("v001-candidate.md"));
+        .contains("art/briefs/reveal.yaml"));
 
-    let approve = Command::new(binary)
-        .args([
-            "--root",
-            directory.path().to_str().unwrap(),
-            "art",
-            "approve",
-            "reveal",
-            "v001",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        approve.status.success(),
-        "{}",
-        String::from_utf8_lossy(&approve.stderr)
-    );
-    assert!(directory
-        .path()
-        .join(".compositor/briefs/reveal/v001-candidate.md")
-        .is_file());
-    assert!(directory
-        .path()
-        .join(".compositor/briefs/reveal/v001-approved.md")
-        .is_file());
-
-    fs::create_dir_all(directory.path().join("assets/approved")).unwrap();
-    fs::write(
-        directory.path().join("assets/approved/reveal.png"),
-        b"not-an-image",
-    )
-    .unwrap();
     let attach = Command::new(binary)
         .args([
             "--root",
@@ -368,7 +360,7 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
             "art",
             "attach",
             "reveal",
-            "assets/approved/reveal.png",
+            "--selected",
         ])
         .output()
         .unwrap();
@@ -395,7 +387,7 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
     assert!(
         fs::read_to_string(directory.path().join("output/proofs/story.html"))
             .unwrap()
-            .contains("../../assets/approved/reveal.png")
+            .contains("../../assets/approved/reveal-a.png")
     );
 
     let removed_attach = Command::new(binary)
@@ -420,18 +412,6 @@ fn approval_copies_candidate_artifacts_and_proof_uses_linked_artwork() {
         .output()
         .unwrap();
     assert!(!removed_inspect.status.success());
-    let removed_approve = Command::new(binary)
-        .args([
-            "--root",
-            directory.path().to_str().unwrap(),
-            "approve",
-            "brief",
-            "reveal",
-            "v001",
-        ])
-        .output()
-        .unwrap();
-    assert!(!removed_approve.status.success());
 }
 
 #[test]

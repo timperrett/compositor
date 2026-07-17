@@ -1,3 +1,4 @@
+use crate::art_brief;
 use crate::build;
 use crate::config::{Config, DEFAULT_CONFIG};
 use crate::discovery::discover;
@@ -114,13 +115,17 @@ enum ArtCommand {
     Brief {
         art_id: String,
     },
-    Approve {
-        art_id: String,
-        revision: String,
+    Validate {
+        #[arg(long)]
+        story: Option<String>,
+        #[arg(long)]
+        strict: bool,
     },
     Attach {
         art_id: String,
-        path: PathBuf,
+        path: Option<PathBuf>,
+        #[arg(long)]
+        selected: bool,
     },
 }
 
@@ -277,17 +282,11 @@ struct ArtListItem {
     layout: String,
     requirement_revision: u64,
     requirement_status: crate::model::ArtifactStatus,
-    candidate_briefs: Vec<String>,
-    approved_brief: Option<String>,
+    art_brief: Option<String>,
+    art_brief_valid: bool,
+    candidate_count: usize,
+    selected_candidate: Option<String>,
     approved_artwork: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ArtBriefOutput {
-    art_id: String,
-    requirement_revision: u64,
-    candidate_briefs: Vec<String>,
-    approved_brief: Option<String>,
 }
 
 fn art_command(
@@ -319,7 +318,7 @@ fn art_command(
                     for (art_id, requirement) in
                         crate::art::requirements_for_story(root, config, &source_story.id)?
                     {
-                        let brief = art_brief_output(root, config, &art_id, &requirement)?;
+                        let brief = art_brief::inspect(root, config, &art_id);
                         let unit = manifest.as_ref().and_then(|manifest| {
                             manifest
                                 .stories
@@ -333,8 +332,20 @@ fn art_command(
                             layout: requirement.layout,
                             requirement_revision: requirement.revision,
                             requirement_status: requirement.status,
-                            candidate_briefs: brief.candidate_briefs,
-                            approved_brief: brief.approved_brief,
+                            art_brief: brief.brief.as_ref().map(|_| brief.path.clone()),
+                            art_brief_valid: brief.brief.is_some()
+                                && brief.validation.can_proceed(),
+                            candidate_count: brief
+                                .brief
+                                .as_ref()
+                                .map(|brief| brief.candidates.len())
+                                .unwrap_or(0),
+                            selected_candidate: brief.brief.as_ref().and_then(|brief| {
+                                brief
+                                    .selection
+                                    .as_ref()
+                                    .map(|selection| selection.candidate_id.clone())
+                            }),
                             approved_artwork: unit.and_then(|unit| unit.approved_art.clone()),
                         });
                     }
@@ -344,27 +355,111 @@ fn art_command(
         }
         ArtCommand::Inspect { art_id } => inspect_art(root, config, format, &art_id),
         ArtCommand::Brief { art_id } => {
-            let requirement = required_art_requirement(root, config, &art_id)?;
-            let output = art_brief_output(root, config, &art_id, &requirement)?;
+            required_art_requirement(root, config, &art_id)?;
+            let output = art_brief::inspect(root, config, &art_id);
             print_report(format, "art brief", output, ValidationReport::default())
         }
-        ArtCommand::Approve { art_id, revision } => {
-            let revision = parse_revision(&revision)?;
-            required_art_requirement(root, config, &art_id)?;
-            let file = storage::approve_brief(root, config, &art_id, revision)?;
-            set_art_relationship(
-                root,
-                config,
-                &art_id,
-                Some(format!("briefs/{art_id}/{file}")),
-                None,
-            )?;
-            print_report(format, "art approve", file, ValidationReport::default())
+        ArtCommand::Validate { story, strict } => {
+            let project = discover(root, config)?;
+            let mut ids = std::collections::BTreeSet::new();
+            for compendium in &project.compendiums {
+                for source_story in &compendium.stories {
+                    if story.as_deref().is_none_or(|id| id == source_story.id) {
+                        ids.extend(
+                            crate::art::requirements_for_story(root, config, &source_story.id)?
+                                .into_keys(),
+                        );
+                    }
+                }
+            }
+            for art_id in art_brief::ids(root)? {
+                let inspection = art_brief::inspect(root, config, &art_id);
+                if story.as_deref().is_none_or(|story_id| {
+                    inspection
+                        .brief
+                        .as_ref()
+                        .is_some_and(|brief| brief.source.story_id == story_id)
+                }) {
+                    ids.insert(art_id);
+                }
+            }
+            let records = ids
+                .into_iter()
+                .map(|art_id| art_brief::inspect(root, config, &art_id))
+                .collect::<Vec<_>>();
+            let validation = ValidationReport {
+                issues: records
+                    .iter()
+                    .flat_map(|record| record.validation.issues.clone())
+                    .collect(),
+            };
+            print_report(format, "art validate", records, validation.clone())?;
+            if validation.is_blocking() {
+                Err(AppError::Blocking(
+                    "art validation contains blocking issues".into(),
+                ))
+            } else if strict && !validation.issues.is_empty() || !validation.can_proceed() {
+                Err(AppError::Validation)
+            } else {
+                Ok(())
+            }
         }
-        ArtCommand::Attach { art_id, path } => {
+        ArtCommand::Attach {
+            art_id,
+            path,
+            selected,
+        } => {
             required_art_requirement(root, config, &art_id)?;
-            let relative = validate_approved_asset(root, config, &path)?;
-            set_art_relationship(root, config, &art_id, None, Some(relative.clone()))?;
+            if selected == path.is_some() {
+                return Err(AppError::Command(
+                    "provide an approved asset path or use --selected".into(),
+                ));
+            }
+            let (relative, brief) = if selected {
+                let inspection = art_brief::inspect(root, config, &art_id);
+                if !inspection.validation.can_proceed() {
+                    return Err(AppError::Validation);
+                }
+                let brief = inspection.brief.ok_or_else(|| {
+                    AppError::Command(format!("no art brief exists for `{art_id}`"))
+                })?;
+                let selected = brief.selection.as_ref().ok_or_else(|| {
+                    AppError::Command(format!("art brief `{art_id}` has no selected candidate"))
+                })?;
+                let candidate = brief
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.id == selected.candidate_id)
+                    .ok_or_else(|| {
+                        AppError::Command(format!(
+                            "selected candidate `{}` does not exist",
+                            selected.candidate_id
+                        ))
+                    })?;
+                let source = root.join(&candidate.file);
+                let extension = source
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .unwrap_or("png");
+                let target = root
+                    .join(&config.assets.approved_directory)
+                    .join(format!("{art_id}-{}.{}", candidate.id, extension));
+                if target.exists() {
+                    return Err(AppError::Command(format!(
+                        "approved artwork already exists: {}",
+                        target.display()
+                    )));
+                }
+                fs::create_dir_all(target.parent().expect("approved asset has parent"))?;
+                fs::copy(source, &target)?;
+                (relative_path(root, &target), Some(inspection.path))
+            } else {
+                (
+                    validate_approved_asset(root, config, path.as_ref().expect("path checked"))?,
+                    None,
+                )
+            };
+            set_art_relationship(root, config, &art_id, brief, Some(relative.clone()))?;
             print_report(format, "art attach", relative, ValidationReport::default())
         }
     }
@@ -382,44 +477,12 @@ fn required_art_requirement(
     })
 }
 
-fn art_brief_output(
-    root: &std::path::Path,
-    config: &Config,
-    art_id: &str,
-    requirement: &crate::model::IllustrationRequirement,
-) -> Result<ArtBriefOutput, AppError> {
-    let directory = storage::brief_directory(root, config, art_id);
-    let mut candidate_briefs = if directory.is_dir() {
-        fs::read_dir(&directory)?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .is_some_and(|name| name.to_string_lossy().ends_with("-candidate.md"))
-            })
-            .map(|path| relative_path(root, &path))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    candidate_briefs.sort();
-    let index = storage::load_artifact_index(root, config, "briefs", art_id)?;
-    Ok(ArtBriefOutput {
-        art_id: art_id.into(),
-        requirement_revision: requirement.revision,
-        candidate_briefs,
-        approved_brief: index
-            .active
-            .map(|file| relative_path(root, &directory.join(file))),
-    })
-}
-
 #[derive(Debug, Serialize)]
 struct StatusOutput {
     changes: ChangeSet,
     active_plans: Vec<String>,
     candidate_plans: Vec<String>,
-    missing_approved_briefs: Vec<String>,
+    missing_art_briefs: Vec<String>,
     artwork_requirements: Vec<String>,
 }
 
@@ -430,7 +493,7 @@ fn status_output(
 ) -> Result<StatusOutput, AppError> {
     let mut active_plans = Vec::new();
     let mut candidate_plans = Vec::new();
-    let mut missing_approved_briefs = Vec::new();
+    let mut missing_art_briefs = Vec::new();
     let mut artwork_requirements = Vec::new();
     for compendium in &prepared.project.compendiums {
         for story in &compendium.stories {
@@ -447,11 +510,8 @@ fn status_output(
                     "{art_id}:v{:03}:{:?}",
                     requirement.revision, requirement.status
                 ));
-                if storage::load_artifact_index(root, config, "briefs", &art_id)?
-                    .active
-                    .is_none()
-                {
-                    missing_approved_briefs.push(art_id);
+                if art_brief::load(root, &art_id)?.is_none() {
+                    missing_art_briefs.push(art_id);
                 }
             }
         }
@@ -460,7 +520,7 @@ fn status_output(
         changes: prepared.changes.clone(),
         active_plans,
         candidate_plans,
-        missing_approved_briefs,
+        missing_art_briefs,
         artwork_requirements,
     })
 }
@@ -575,7 +635,6 @@ fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(),
     fs::create_dir_all(root.join(".compositor/state"))?;
     fs::create_dir_all(root.join(".compositor/plans"))?;
     fs::create_dir_all(root.join(".compositor/requirements"))?;
-    fs::create_dir_all(root.join(".compositor/briefs"))?;
     fs::create_dir_all(root.join(".compositor/layouts"))?;
     fs::create_dir_all(root.join(".compositor/history"))?;
     fs::create_dir_all(root.join(".compositor/locks"))?;
@@ -614,7 +673,7 @@ This directory is a Compositor project. Write stories in Markdown, then use
 - `assets/references/` stores source reference material; `assets/drafts/` holds
   in-progress art; `assets/approved/` holds artwork you want to preserve.
 - `.compositor/` is generated state: the current manifest, immutable history,
-  page-plan and illustration-requirement revisions, candidate art briefs, and
+  page-plan and illustration-requirement revisions, and
   any manual identity resolutions. Do not edit it by hand.
 - `output/reports/`, `output/proofs/`, and `output/text/` contain generated
   review and layout artifacts. HTML proofs are written to `output/proofs/`;
@@ -653,13 +712,14 @@ include `art`, `layout`, `keep-with-next`, and `unit`; see `compositor --help`.
 3. Run `compositor status --format json` for a machine-readable change report.
 4. Run `compositor proof` to generate HTML proofs.
 
-Art directives and artwork-oriented layouts create an illustration requirement
-plus a candidate Markdown brief at `.compositor/briefs/<art-id>/`. Review or
-edit that candidate, then use `compositor art approve <art-id> v001`.
-Use `compositor art list`, `compositor art inspect <art-id>`, and
-`compositor art brief <art-id>` to review artwork state. Link an approved asset
-with `compositor art attach <art-id> assets/approved/<file>`; source files and
-approved artifacts are never edited by Compositor.
+Art directives and artwork-oriented layouts create an illustration requirement.
+Create a matching skill-authored YAML record at `art/briefs/<art-id>.yaml`; it
+contains the generation prompt, candidates, feedback, and selection. Run
+`compositor art validate --strict` before generation or promotion. Use
+`compositor art list`, `compositor art inspect <art-id>`, and `compositor art
+brief <art-id>` to review artwork state. Promote a selected candidate with
+`compositor art attach <art-id> --selected`; source files and approved artifacts
+are never edited in place by Compositor.
 
 Use `compositor resolve <old-id> <new-id>` only to record a deliberate manual
 identity match that Compositor could not determine automatically.

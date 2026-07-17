@@ -1,0 +1,13 @@
+schema_version: 1
+art_id: golden-book-reveal
+source:
+  story_id: golden-book-of-kindness
+  unit_ids: [golden-book-reveal]
+  requirement_revision: 2
+generation:
+  prompt: Edgar opens the golden book in a calm moonlit library.
+candidates:
+  - id: a
+    file: assets/drafts/golden-book-reveal/r02/candidate-a.png
+selection:
+  candidate_id: a

@@ -1,0 +1,25 @@
+schema_version: 1
+art_id: dragon-map-library-discovery
+source:
+  story_id: dragon-map-that-wasnt-there
+  unit_ids: [dragon-map-library-discovery]
+  requirement_revision: 1
+context:
+  art_note: Story opener in the rain-dim Royal Library with Edgar, Lady Aster, and the dragon-carved box.
+  canon_references:
+    - canon/illustration-style.md
+    - canon/characters/edgar.md
+    - canon/characters/lady-aster.md
+generation:
+  mode: exploration
+  prompt: >
+    In a rain-dim Royal Library, Lady Aster lowers a dragon-carved wooden box
+    from a high shelf while five-year-old Edgar watches in wonder. Use a
+    child-height view, quiet upper-left text-safe space, warm candlelight, and
+    no visible words, later story beats, or modern objects.
+  exclusions: [readable text, watermark, glossy 3D]
+candidates:
+  - id: a
+    file: assets/drafts/dragon-map-library-discovery/r01/candidate-a.png
+  - id: b
+    file: assets/drafts/dragon-map-library-discovery/r01/candidate-b.png
