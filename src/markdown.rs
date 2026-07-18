@@ -1,4 +1,4 @@
-use crate::model::{Directives, Unit};
+use crate::model::{ArtLayout, ArtOrientation, ArtSurface, Directives, Unit};
 use crate::AppError;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
@@ -120,6 +120,14 @@ fn parse_directives(content: &str) -> Result<Directives, AppError> {
                 }
                 result.art = Some(value.into());
             }
+            "art-layout" => {
+                if result.art_layout.is_some() {
+                    return Err(AppError::Config(
+                        "multiple art-layout directives in one unit".into(),
+                    ));
+                }
+                result.art_layout = Some(parse_art_layout(value)?);
+            }
             "layout" => {
                 if !matches!(
                     value,
@@ -236,9 +244,80 @@ fn top_level_comment_ranges(input: &str) -> Vec<std::ops::Range<usize>> {
 
 fn is_directive_comment(comment: &str) -> bool {
     comment == "keep-with-next"
-        || comment
-            .split_once(':')
-            .is_some_and(|(name, _)| matches!(name.trim(), "anchor" | "art" | "layout" | "unit"))
+        || comment.split_once(':').is_some_and(|(name, _)| {
+            matches!(
+                name.trim(),
+                "anchor" | "art" | "art-layout" | "layout" | "unit"
+            )
+        })
+}
+
+fn parse_art_layout(value: &str) -> Result<ArtLayout, AppError> {
+    let mut surface = None;
+    let mut orientation = None;
+    let mut height_percent = None;
+    for token in value.split_whitespace() {
+        let Some((key, raw_value)) = token.split_once('=') else {
+            return Err(AppError::Config(format!(
+                "art-layout fields must use key=value syntax: `{token}`"
+            )));
+        };
+        match key {
+            "surface" if surface.is_none() => {
+                surface = Some(match raw_value {
+                    "single-page" => ArtSurface::SinglePage,
+                    "double-page-spread" => ArtSurface::DoublePageSpread,
+                    _ => {
+                        return Err(AppError::Config(format!(
+                            "unsupported art-layout surface `{raw_value}`"
+                        )))
+                    }
+                });
+            }
+            "orientation" if orientation.is_none() => {
+                orientation = Some(match raw_value {
+                    "portrait" => ArtOrientation::Portrait,
+                    "landscape" => ArtOrientation::Landscape,
+                    _ => {
+                        return Err(AppError::Config(format!(
+                            "unsupported art-layout orientation `{raw_value}`"
+                        )))
+                    }
+                });
+            }
+            "height" if height_percent.is_none() => {
+                let raw = raw_value.strip_suffix('%').ok_or_else(|| {
+                    AppError::Config("art-layout height must be a percentage".into())
+                })?;
+                let value = raw.parse::<u8>().map_err(|_| {
+                    AppError::Config(format!("invalid art-layout height `{raw_value}`"))
+                })?;
+                if !(1..=100).contains(&value) {
+                    return Err(AppError::Config(
+                        "art-layout height must be between 1% and 100%".into(),
+                    ));
+                }
+                height_percent = Some(value);
+            }
+            "surface" | "orientation" | "height" => {
+                return Err(AppError::Config(format!(
+                    "duplicate art-layout field `{key}`"
+                )))
+            }
+            _ => {
+                return Err(AppError::Config(format!(
+                    "unsupported art-layout field `{key}`"
+                )))
+            }
+        }
+    }
+    Ok(ArtLayout {
+        surface: surface.ok_or_else(|| AppError::Config("art-layout requires surface".into()))?,
+        orientation: orientation
+            .ok_or_else(|| AppError::Config("art-layout requires orientation".into()))?,
+        height_percent: height_percent
+            .ok_or_else(|| AppError::Config("art-layout requires height".into()))?,
+    })
 }
 
 pub fn normalize(input: &str) -> String {
@@ -271,6 +350,31 @@ mod tests {
             parse_document("<!-- anchor: reveal -->\n<!-- layout: full-page -->\nText").unwrap();
         assert_eq!(parsed.units[0].directives.anchor.as_deref(), Some("reveal"));
         assert_eq!(parsed.units[0].word_count, 1);
+    }
+
+    #[test]
+    fn parses_computed_art_layout_directive() {
+        let parsed = parse_document(
+            "<!-- art-layout: surface=double-page-spread orientation=landscape height=45% -->\nText",
+        )
+        .unwrap();
+        let layout = parsed.units[0].directives.art_layout.as_ref().unwrap();
+        assert_eq!(layout.surface, ArtSurface::DoublePageSpread);
+        assert_eq!(layout.orientation, ArtOrientation::Landscape);
+        assert_eq!(layout.height_percent, 45);
+    }
+
+    #[test]
+    fn rejects_invalid_art_layout_fields() {
+        for value in [
+            "surface=single-page orientation=portrait",
+            "surface=single-page orientation=portrait height=0%",
+            "surface=single-page orientation=sideways height=45%",
+            "surface=single-page orientation=portrait height=45% height=50%",
+            "surface=single-page orientation=portrait height=45",
+        ] {
+            assert!(parse_document(&format!("<!-- art-layout: {value} -->\nText")).is_err());
+        }
     }
 
     #[test]

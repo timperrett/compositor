@@ -250,6 +250,41 @@ fn artwork_requirements_are_generated_without_legacy_briefs() {
 }
 
 #[test]
+fn art_layout_controls_surface_and_requirement_geometry() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: page-art -->\n<!-- art: A page illustration. -->\n<!-- art-layout: surface=single-page orientation=portrait height=50% -->\nPage art.\n\n---\n\n<!-- anchor: spread-art -->\n<!-- art: A spread illustration. -->\n<!-- art-layout: surface=double-page-spread orientation=landscape height=50% -->\nSpread art.\n",
+    )
+    .unwrap();
+    let config = Config::load(directory.path()).unwrap();
+    let (_, _, plans) = build::build(directory.path(), &config, None).unwrap();
+    assert_eq!(plans[0].assignments[0].pages, vec![1]);
+    assert_eq!(plans[0].assignments[1].pages, vec![2, 3]);
+
+    let page: IllustrationRequirement = storage::read_json(
+        &directory
+            .path()
+            .join(".compositor/requirements/page-art/v001-candidate.json"),
+    )
+    .unwrap();
+    let page_geometry = page.geometry.unwrap();
+    assert_eq!(page_geometry.width_px, 1560);
+    assert_eq!(page_geometry.height_px, 1500);
+    assert!((page_geometry.aspect_ratio - (5.2 / 5.0)).abs() < 0.0001);
+
+    let spread: IllustrationRequirement = storage::read_json(
+        &directory
+            .path()
+            .join(".compositor/requirements/spread-art/v001-candidate.json"),
+    )
+    .unwrap();
+    let spread_geometry = spread.geometry.unwrap();
+    assert_eq!(spread_geometry.width_px, 4800);
+    assert_eq!(spread_geometry.height_px, 1500);
+}
+
+#[test]
 fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     let directory = project();
     fs::write(

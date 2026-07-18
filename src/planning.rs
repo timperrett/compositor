@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::identity::ResolvedStory;
 use crate::model::{
-    ArtifactStatus, PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION,
+    ArtSurface, ArtifactStatus, PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION,
 };
 use crate::storage;
 use crate::AppError;
@@ -140,7 +140,19 @@ fn fresh_assignments_from(
             continue;
         }
         let layout = layout_for(unit);
-        if layout != "text-dominant" {
+        if let Some(art_layout) = &unit.directives.art_layout {
+            if layout == "full-page" && matches!(art_layout.surface, ArtSurface::DoublePageSpread) {
+                warnings.push(format!(
+                    "unit {id} combines layout `full-page` with art-layout surface `double-page-spread`"
+                ));
+            }
+            if layout == "full-spread" && matches!(art_layout.surface, ArtSurface::SinglePage) {
+                warnings.push(format!(
+                    "unit {id} combines layout `full-spread` with art-layout surface `single-page`"
+                ));
+            }
+        }
+        if layout != "text-dominant" || unit.directives.art_layout.is_some() {
             if keep_with_next {
                 warnings.push(format!(
                     "unit {id} requests keep-with-next, but the following unit has layout `{layout}`"
@@ -153,7 +165,13 @@ fn fresh_assignments_from(
                 &mut text_fragments,
                 &mut text_words,
             );
-            let pages = if layout == "full-spread" {
+            let pages = if unit
+                .directives
+                .art_layout
+                .as_ref()
+                .is_some_and(|layout| matches!(layout.surface, ArtSurface::DoublePageSpread))
+                || layout == "full-spread"
+            {
                 vec![next_page, next_page + 1]
             } else {
                 vec![next_page]
@@ -385,6 +403,7 @@ fn attach_art_ids(
 
 pub fn art_needed(unit: &Unit) -> bool {
     unit.directives.art.is_some()
+        || unit.directives.art_layout.is_some()
         || matches!(
             layout_for(unit),
             "art-dominant"

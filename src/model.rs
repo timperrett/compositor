@@ -53,11 +53,11 @@ pub struct Directives {
     pub unit_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArtLayout {
     pub surface: ArtSurface,
     pub orientation: ArtOrientation,
-    pub height_percent: f64,
+    pub height_percent: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -239,21 +239,16 @@ pub struct PageAssignment {
     pub art_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactStatus {
+    #[default]
     Candidate,
     NeedsReview,
     Approved,
     Superseded,
     Orphaned,
     Locked,
-}
-
-impl Default for ArtifactStatus {
-    fn default() -> Self {
-        Self::Candidate
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
