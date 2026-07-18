@@ -3,7 +3,7 @@ use crate::markdown::strip_directives;
 use crate::model::{SourceProject, Story};
 use crate::storage;
 use crate::AppError;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::path::{Path, PathBuf};
 
 /// Returns the deterministic set of layout-text artifacts for a project.
@@ -49,7 +49,15 @@ pub fn render_story(story: &Story) -> String {
     let body = story
         .units
         .iter()
-        .map(|unit| plain_text(&strip_directives(&unit.content)))
+        .enumerate()
+        .map(|(index, unit)| {
+            let content = strip_directives(&unit.content);
+            if index == 0 {
+                plain_text_without_leading_title_heading(&content)
+            } else {
+                plain_text(&content)
+            }
+        })
         .filter(|unit| !unit.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -70,9 +78,50 @@ fn render_compendium(stories: &[Story]) -> String {
 
 /// Renders Markdown to text intended for import into a layout application.
 pub fn plain_text(input: &str) -> String {
+    render_events(Parser::new_ext(input, Options::all()))
+}
+
+fn plain_text_without_leading_title_heading(input: &str) -> String {
+    let events = Parser::new_ext(input, Options::all()).collect::<Vec<_>>();
+    let Some((start, end)) = leading_heading(&events) else {
+        return render_events(events);
+    };
+    render_events(
+        events
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, event)| (index < start || index > end).then_some(event)),
+    )
+}
+
+fn leading_heading(events: &[Event<'_>]) -> Option<(usize, usize)> {
+    let start = events.iter().position(|event| {
+        matches!(
+            event,
+            Event::Start(Tag::Heading {
+                level: HeadingLevel::H1,
+                ..
+            })
+        )
+    })?;
+    if events[..start]
+        .iter()
+        .any(|event| matches!(event, Event::Text(_) | Event::Code(_)))
+    {
+        return None;
+    }
+    let end = events[start + 1..]
+        .iter()
+        .position(|event| matches!(event, Event::End(TagEnd::Heading(HeadingLevel::H1))))?
+        + start
+        + 1;
+    Some((start, end))
+}
+
+fn render_events<'a>(events: impl IntoIterator<Item = Event<'a>>) -> String {
     let mut output = String::new();
     let mut list_depth = 0usize;
-    for event in Parser::new_ext(input, Options::all()) {
+    for event in events {
         match event {
             Event::Start(Tag::Paragraph)
             | Event::Start(Tag::Heading { .. })

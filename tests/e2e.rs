@@ -118,12 +118,12 @@ fn build_generates_plain_text_layout_exports_without_markdown() {
     let directory = project();
     fs::write(
         directory.path().join("compendiums/01-magic/01-story.md"),
-        "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\n# A **bold** beginning\n\nA [linked](https://example.com) paragraph.\n\n- First item\n- Second item\n\n---\n\n> A closing quotation.\n",
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\n# A Story Display Title\n\n# A **bold** beginning\n\nA [linked](https://example.com) paragraph.\n\n- First item\n- Second item\n\n---\n\n> A closing quotation.\n",
     )
     .unwrap();
     fs::write(
         directory.path().join("compendiums/01-magic/02-second.md"),
-        "---\nid: second\ntitle: Second Story\n---\nSecond body.\n",
+        "---\nid: second\ntitle: Second Story\n---\n# Magic\n\nSecond body.\n",
     )
     .unwrap();
     let config = Config::load(directory.path()).unwrap();
@@ -135,7 +135,7 @@ fn build_generates_plain_text_layout_exports_without_markdown() {
         story,
         "A bold beginning\n\nA linked paragraph.\n\n• First item\n• Second item\n\nA closing quotation.\n"
     );
-    assert!(!story.contains("Story"));
+    assert!(!story.contains("A Story Display Title"));
     assert!(!story.contains("<!--"));
     assert!(!story.contains("**"));
     assert!(!story.contains("[linked]("));
@@ -143,7 +143,10 @@ fn build_generates_plain_text_layout_exports_without_markdown() {
     assert_eq!(compendium, format!("{story}\n\nSecond body.\n"));
     assert!(!compendium.contains("Magic"));
     assert!(!compendium.contains("Second Story"));
-    assert!(directory.path().join("output/text/second.txt").is_file());
+    assert_eq!(
+        fs::read_to_string(directory.path().join("output/text/second.txt")).unwrap(),
+        "Second body.\n"
+    );
 }
 
 #[test]
