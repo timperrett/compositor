@@ -47,9 +47,41 @@ pub struct Unit {
 pub struct Directives {
     pub anchor: Option<String>,
     pub art: Option<String>,
+    pub art_layout: Option<ArtLayout>,
     pub layout: Option<String>,
     pub keep_with_next: bool,
     pub unit_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArtLayout {
+    pub surface: ArtSurface,
+    pub orientation: ArtOrientation,
+    pub height_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtSurface {
+    SinglePage,
+    DoublePageSpread,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtOrientation {
+    Portrait,
+    Landscape,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArtGeometry {
+    pub surface_width_in: f64,
+    pub height_in: f64,
+    pub width_in: f64,
+    pub aspect_ratio: f64,
+    pub width_px: u32,
+    pub height_px: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,7 +256,7 @@ impl Default for ArtifactStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IllustrationRequirement {
     pub schema_version: u32,
     pub art_id: String,
@@ -234,6 +266,10 @@ pub struct IllustrationRequirement {
     pub layout: String,
     pub status: ArtifactStatus,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_layout: Option<ArtLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<ArtGeometry>,
     /// The authored art intent, retained so a generated Markdown brief has a
     /// deterministic starting point without copying it into the manuscript.
     #[serde(skip_serializing_if = "Option::is_none")]

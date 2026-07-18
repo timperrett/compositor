@@ -16,6 +16,7 @@ pub struct Config {
     pub markdown: MarkdownConfig,
     pub build: BuildConfig,
     pub book: BookConfig,
+    pub art_layout: ArtLayoutConfig,
     pub pagination: PaginationConfig,
 }
 
@@ -70,6 +71,16 @@ pub struct BookConfig {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct ArtLayoutConfig {
+    pub pixels_per_inch: f64,
+    pub spread_gutter_in: f64,
+    pub single_page_portrait_width_fraction: f64,
+    pub single_page_landscape_width_fraction: f64,
+    pub double_page_portrait_width_fraction: f64,
+    pub double_page_landscape_width_fraction: f64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaginationConfig {
     pub target_words_per_text_page: usize,
     pub maximum_words_per_text_page: usize,
@@ -88,6 +99,7 @@ impl Default for Config {
             markdown: MarkdownConfig::default(),
             build: BuildConfig::default(),
             book: BookConfig::default(),
+            art_layout: ArtLayoutConfig::default(),
             pagination: PaginationConfig::default(),
         }
     }
@@ -166,6 +178,18 @@ impl Default for PaginationConfig {
         }
     }
 }
+impl Default for ArtLayoutConfig {
+    fn default() -> Self {
+        Self {
+            pixels_per_inch: 300.0,
+            spread_gutter_in: 0.0,
+            single_page_portrait_width_fraction: 0.65,
+            single_page_landscape_width_fraction: 1.0,
+            double_page_portrait_width_fraction: 0.45,
+            double_page_landscape_width_fraction: 1.0,
+        }
+    }
+}
 
 impl Config {
     pub fn load(root: &Path) -> Result<Self, AppError> {
@@ -214,6 +238,21 @@ impl Config {
                 "book.orientation must be `portrait` or `landscape`".into(),
             ));
         }
+        if self.art_layout.pixels_per_inch <= 0.0
+            || self.art_layout.spread_gutter_in < 0.0
+            || [
+                self.art_layout.single_page_portrait_width_fraction,
+                self.art_layout.single_page_landscape_width_fraction,
+                self.art_layout.double_page_portrait_width_fraction,
+                self.art_layout.double_page_landscape_width_fraction,
+            ]
+            .into_iter()
+            .any(|fraction| fraction <= 0.0 || fraction > 1.0)
+        {
+            return Err(AppError::Config(
+                "art_layout dimensions and width envelopes must be positive; width envelopes must not exceed 1".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -223,10 +262,11 @@ impl Config {
     pub fn pagination_fingerprint(&self) -> String {
         let pagination = &self.pagination;
         let input = format!(
-            "pagination-v3\ntarget={}\nmaximum={}\nrecto={}",
+            "pagination-v4\ntarget={}\nmaximum={}\nrecto={}\nart-layout={:?}",
             pagination.target_words_per_text_page,
             pagination.maximum_words_per_text_page,
             pagination.story_starts_on_recto,
+            self.art_layout,
         );
         format!("sha256:{:x}", Sha256::digest(input.as_bytes()))
     }
@@ -272,6 +312,14 @@ trim_width_in = 8.0
 trim_height_in = 10.0
 orientation = "portrait"
 bleed_in = 0.125
+
+[art_layout]
+pixels_per_inch = 300.0
+spread_gutter_in = 0.0
+single_page_portrait_width_fraction = 0.65
+single_page_landscape_width_fraction = 1.0
+double_page_portrait_width_fraction = 0.45
+double_page_landscape_width_fraction = 1.0
 
 [pagination]
 target_words_per_text_page = 90

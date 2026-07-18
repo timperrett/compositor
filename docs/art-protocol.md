@@ -19,9 +19,10 @@ revision from `compositor art inspect <art-id> --format json`.
 `generation.prompt` is the canonical image-generation request. It can be a
 direct, exploratory prompt: authors do not need to formalize a visual brief
 before looking at candidates. `generation.mode` defaults to `exploration`.
-`generation.bleed_mode` is required: use `contained` for art that fades into
-an otherwise unpainted page, or `full-bleed` for art that deliberately fills
-the complete printed frame.
+`generation.page_treatment` is required. Use `floating` for art that fades
+into an otherwise unpainted page, `framed` for rectangular art enclosed by a
+thin hand-painted medium-black keyline inside a white margin, or `full-bleed`
+for art that deliberately fills the complete printed frame.
 
 All `file` and `canon_references` paths are project-relative. Candidates must
 be existing PNG, JPG, JPEG, or WebP files. A selected candidate must be listed

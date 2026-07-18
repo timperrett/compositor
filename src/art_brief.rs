@@ -45,7 +45,7 @@ pub struct ArtBriefContext {
 pub struct ArtGeneration {
     #[serde(default = "exploration_mode")]
     pub mode: String,
-    pub bleed_mode: BleedMode,
+    pub page_treatment: PageTreatment,
     pub prompt: String,
     #[serde(default)]
     pub exclusions: Vec<String>,
@@ -53,8 +53,9 @@ pub struct ArtGeneration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum BleedMode {
-    Contained,
+pub enum PageTreatment {
+    Floating,
+    Framed,
     FullBleed,
 }
 
@@ -426,7 +427,7 @@ pub fn relative(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtBrief, BleedMode};
+    use super::{ArtBrief, PageTreatment};
 
     const BRIEF: &str = r#"
 schema_version: 1
@@ -436,26 +437,36 @@ source:
   unit_ids: [reveal]
   requirement_revision: 1
 generation:
-  bleed_mode: contained
+  page_treatment: floating
   prompt: A moonlit library.
 "#;
 
     #[test]
-    fn accepts_supported_bleed_modes() {
-        let contained: ArtBrief = serde_yaml::from_str(BRIEF).unwrap();
-        assert_eq!(contained.generation.bleed_mode, BleedMode::Contained);
+    fn accepts_supported_page_treatments() {
+        let floating: ArtBrief = serde_yaml::from_str(BRIEF).unwrap();
+        assert_eq!(floating.generation.page_treatment, PageTreatment::Floating);
+
+        let framed: ArtBrief = serde_yaml::from_str(&BRIEF.replace("floating", "framed")).unwrap();
+        assert_eq!(framed.generation.page_treatment, PageTreatment::Framed);
 
         let full_bleed: ArtBrief =
-            serde_yaml::from_str(&BRIEF.replace("contained", "full-bleed")).unwrap();
-        assert_eq!(full_bleed.generation.bleed_mode, BleedMode::FullBleed);
+            serde_yaml::from_str(&BRIEF.replace("floating", "full-bleed")).unwrap();
+        assert_eq!(
+            full_bleed.generation.page_treatment,
+            PageTreatment::FullBleed
+        );
     }
 
     #[test]
-    fn rejects_missing_or_unknown_bleed_modes() {
-        assert!(
-            serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("  bleed_mode: contained\n", ""))
-                .is_err()
-        );
-        assert!(serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("contained", "framed")).is_err());
+    fn rejects_missing_legacy_or_unknown_page_treatments() {
+        assert!(serde_yaml::from_str::<ArtBrief>(
+            &BRIEF.replace("  page_treatment: floating\n", "")
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<ArtBrief>(
+            &BRIEF.replace("page_treatment: floating", "bleed_mode: contained")
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("floating", "bordered")).is_err());
     }
 }

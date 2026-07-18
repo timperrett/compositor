@@ -12,7 +12,7 @@ context:
     - canon/characters/lady-aster.md
 generation:
   mode: exploration
-  bleed_mode: contained
+  page_treatment: floating
   prompt: >
     In a rain-dim Royal Library, Lady Aster lowers a dragon-carved wooden box
     from a high shelf while five-year-old Edgar watches in wonder. Use a

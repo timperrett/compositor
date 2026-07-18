@@ -278,7 +278,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  bleed_mode: full-bleed\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  page_treatment: full-bleed\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
     )
     .unwrap();
     let validate = Command::new(binary)
@@ -339,7 +339,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     );
     assert!(String::from_utf8(inspect.stdout)
         .unwrap()
-        .contains("\"bleed_mode\": \"full-bleed\""));
+        .contains("\"page_treatment\": \"full-bleed\""));
     let brief = Command::new(binary)
         .args([
             "--root",
@@ -359,7 +359,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     );
     let brief = String::from_utf8(brief.stdout).unwrap();
     assert!(brief.contains("art/briefs/reveal.yaml"));
-    assert!(brief.contains("\"bleed_mode\": \"full-bleed\""));
+    assert!(brief.contains("\"page_treatment\": \"full-bleed\""));
 
     let attach = Command::new(binary)
         .args([
@@ -423,7 +423,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
 }
 
 #[test]
-fn strict_art_validation_rejects_missing_or_unknown_bleed_modes() {
+fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
     let directory = project();
     fs::write(
         directory.path().join("compendiums/01-magic/01-story.md"),
@@ -442,14 +442,16 @@ fn strict_art_validation_rejects_missing_or_unknown_bleed_modes() {
     );
     fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
 
-    for bleed_mode in [None, Some("framed")] {
-        let bleed_mode = bleed_mode
-            .map(|value| format!("  bleed_mode: {value}\\n"))
-            .unwrap_or_default();
+    for treatment in [
+        None,
+        Some("  bleed_mode: contained\\n"),
+        Some("  page_treatment: bordered\\n"),
+    ] {
+        let treatment = treatment.map(str::to_owned).unwrap_or_default();
         fs::write(
             directory.path().join("art/briefs/reveal.yaml"),
             format!(
-                "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n{bleed_mode}  prompt: A moonlit library.\n"
+                "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n{treatment}  prompt: A moonlit library.\n"
             ),
         )
         .unwrap();
