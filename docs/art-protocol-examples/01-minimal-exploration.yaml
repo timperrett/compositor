@@ -6,6 +6,7 @@ source:
   requirement_revision: 1
 generation:
   mode: exploration
+  bleed_mode: contained
   prompt: >
     Edgar discovers a golden book in a moonlit library. Explore a warm,
     curious picture-book moment with room for text.

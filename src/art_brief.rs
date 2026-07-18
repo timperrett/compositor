@@ -45,9 +45,17 @@ pub struct ArtBriefContext {
 pub struct ArtGeneration {
     #[serde(default = "exploration_mode")]
     pub mode: String,
+    pub bleed_mode: BleedMode,
     pub prompt: String,
     #[serde(default)]
     pub exclusions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BleedMode {
+    Contained,
+    FullBleed,
 }
 
 fn exploration_mode() -> String {
@@ -414,4 +422,40 @@ pub fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ArtBrief, BleedMode};
+
+    const BRIEF: &str = r#"
+schema_version: 1
+art_id: reveal
+source:
+  story_id: story
+  unit_ids: [reveal]
+  requirement_revision: 1
+generation:
+  bleed_mode: contained
+  prompt: A moonlit library.
+"#;
+
+    #[test]
+    fn accepts_supported_bleed_modes() {
+        let contained: ArtBrief = serde_yaml::from_str(BRIEF).unwrap();
+        assert_eq!(contained.generation.bleed_mode, BleedMode::Contained);
+
+        let full_bleed: ArtBrief =
+            serde_yaml::from_str(&BRIEF.replace("contained", "full-bleed")).unwrap();
+        assert_eq!(full_bleed.generation.bleed_mode, BleedMode::FullBleed);
+    }
+
+    #[test]
+    fn rejects_missing_or_unknown_bleed_modes() {
+        assert!(
+            serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("  bleed_mode: contained\n", ""))
+                .is_err()
+        );
+        assert!(serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("contained", "framed")).is_err());
+    }
 }

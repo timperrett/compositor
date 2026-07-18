@@ -849,10 +849,11 @@ fn inspect_art(
         .as_ref()
         .and_then(|manifest| manifest.stories.get(&requirement.story_id))
         .and_then(|story| story.units.iter().find(|unit| unit.id == art_id));
+    let brief = art_brief::inspect(root, config, art_id);
     print_report(
         format,
         "art inspect",
-        serde_json::json!({ "requirement": requirement, "unit": unit }),
+        serde_json::json!({ "requirement": requirement, "unit": unit, "brief": brief }),
         ValidationReport::default(),
     )
 }

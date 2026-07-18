@@ -5,6 +5,7 @@ source:
   unit_ids: [golden-book-reveal]
   requirement_revision: 2
 generation:
+  bleed_mode: contained
   prompt: Edgar opens the golden book in a calm moonlit library.
 candidates:
   - id: a

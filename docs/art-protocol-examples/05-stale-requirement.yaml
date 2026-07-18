@@ -5,6 +5,7 @@ source:
   unit_ids: [golden-book-reveal]
   requirement_revision: 1
 generation:
+  bleed_mode: contained
   prompt: Edgar opens the golden book in a calm moonlit library.
 # When Compositor reports requirement revision 2, this record remains readable
 # but `compositor art validate` warns that it should be reviewed.
