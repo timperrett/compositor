@@ -133,16 +133,16 @@ fn build_generates_plain_text_layout_exports_without_markdown() {
     let story = fs::read_to_string(directory.path().join("output/text/story.txt")).unwrap();
     assert_eq!(
         story,
-        "Story\n\nA bold beginning\n\nA linked paragraph.\n\n• First item\n• Second item\n\nA closing quotation.\n"
+        "A bold beginning\n\nA linked paragraph.\n\n• First item\n• Second item\n\nA closing quotation.\n"
     );
+    assert!(!story.contains("Story"));
     assert!(!story.contains("<!--"));
     assert!(!story.contains("**"));
     assert!(!story.contains("[linked]("));
     let compendium = fs::read_to_string(directory.path().join("output/text/magic.txt")).unwrap();
-    assert_eq!(
-        compendium,
-        format!("{story}\n\nSecond Story\n\nSecond body.\n")
-    );
+    assert_eq!(compendium, format!("{story}\n\nSecond body.\n"));
+    assert!(!compendium.contains("Magic"));
+    assert!(!compendium.contains("Second Story"));
     assert!(directory.path().join("output/text/second.txt").is_file());
 }
 

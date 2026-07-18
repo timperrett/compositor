@@ -46,7 +46,6 @@ pub fn write_exports(
 }
 
 pub fn render_story(story: &Story) -> String {
-    let title = plain_text(&story.title);
     let body = story
         .units
         .iter()
@@ -55,9 +54,9 @@ pub fn render_story(story: &Story) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     if body.is_empty() {
-        format!("{title}\n")
+        String::new()
     } else {
-        format!("{title}\n\n{body}\n")
+        format!("{body}\n")
     }
 }
 
