@@ -1,0 +1,15 @@
+schema_version: 1
+art_id: edgar-and-harbour-bell
+source:
+  story_id: world-of-lantern-tides
+  unit_ids: [lantern-tides-lantern-rescue]
+  requirement_revision: 1
+generation:
+  page_treatment: spot
+  prompt: >
+    A compact isolated storybook illustration of Edgar holding a small harbour
+    bell beside Glowfin, on a perfectly clean pure neutral white (#FFFFFF) RGB
+    background. Keep both fully inside a generous white margin. Use delicate
+    internal ink linework and soft watercolor only on the figures. No scenery,
+    horizon, floor, shadows, border, keyline, halo, wash, texture, text, or
+    additional characters.

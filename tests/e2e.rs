@@ -278,7 +278,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  page_treatment: full-bleed\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
     )
     .unwrap();
     let validate = Command::new(binary)
@@ -339,7 +339,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     );
     assert!(String::from_utf8(inspect.stdout)
         .unwrap()
-        .contains("\"page_treatment\": \"full-bleed\""));
+        .contains("\"page_treatment\": \"spot\""));
     let brief = Command::new(binary)
         .args([
             "--root",
@@ -359,7 +359,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     );
     let brief = String::from_utf8(brief.stdout).unwrap();
     assert!(brief.contains("art/briefs/reveal.yaml"));
-    assert!(brief.contains("\"page_treatment\": \"full-bleed\""));
+    assert!(brief.contains("\"page_treatment\": \"spot\""));
 
     let attach = Command::new(binary)
         .args([

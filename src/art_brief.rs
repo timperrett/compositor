@@ -57,6 +57,7 @@ pub enum PageTreatment {
     Floating,
     Framed,
     FullBleed,
+    Spot,
 }
 
 fn exploration_mode() -> String {
@@ -316,6 +317,7 @@ pub fn validate(
     report
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_file(
     root: &Path,
     value: &str,
@@ -455,6 +457,9 @@ generation:
             full_bleed.generation.page_treatment,
             PageTreatment::FullBleed
         );
+
+        let spot: ArtBrief = serde_yaml::from_str(&BRIEF.replace("floating", "spot")).unwrap();
+        assert_eq!(spot.generation.page_treatment, PageTreatment::Spot);
     }
 
     #[test]
