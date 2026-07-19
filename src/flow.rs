@@ -151,7 +151,7 @@ pub struct DesignSystem {
 pub fn load_plan(path: &Path) -> Result<StoryFlowPlan, AppError> {
     let text = fs::read_to_string(path)?;
     serde_yaml::from_str(&text)
-        .map_err(|error| AppError::Serialization(format!("{}: {error}", path.display())))
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
 }
 
 pub fn load_story(path: &Path) -> Result<Story, AppError> {
@@ -181,13 +181,13 @@ fn metadata_string(
         .get(key)
         .and_then(serde_yaml::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| AppError::Config(format!("missing `{key}` in {}", path.display())))
+        .ok_or_else(|| AppError::config(format!("missing `{key}` in {}", path.display())))
 }
 
 pub fn load_design_system(directory: &Path) -> Result<DesignSystem, AppError> {
     let descriptor: DesignSystemDescriptor = read_yaml(&directory.join("design-system.yaml"))?;
     if descriptor.schema != DESIGN_SYSTEM_SCHEMA {
-        return Err(AppError::Config(format!(
+        return Err(AppError::config(format!(
             "unsupported design system schema `{}`",
             descriptor.schema
         )));
@@ -205,7 +205,7 @@ pub fn load_design_system(directory: &Path) -> Result<DesignSystem, AppError> {
 fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
     let text = fs::read_to_string(path)?;
     serde_yaml::from_str(&text)
-        .map_err(|error| AppError::Serialization(format!("{}: {error}", path.display())))
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
 }
 
 pub fn validate(story: &Story, plan: &StoryFlowPlan, design: &DesignSystem) -> ValidationReport {

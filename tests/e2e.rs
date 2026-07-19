@@ -735,3 +735,73 @@ fn cli_initializes_and_builds_json_output() {
     assert!(build_output.contains("\"text_exports\""));
     assert!(build_output.contains("output/text/story.txt"));
 }
+
+#[test]
+fn cli_inspects_and_validates_a_story_flow_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let story = directory.path().join("story.md");
+    fs::write(
+        &story,
+        "---\nid: map\ntitle: The Map\n---\n<!-- paragraph: opening-rain -->\n\nRain whispered.\n\n<!-- paragraph: map-revealed -->\n\nThe map shone.\n",
+    )
+    .unwrap();
+    let inspect = Command::new(binary)
+        .args(["--format", "json", "inspect", story.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    let inspection: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(inspection["command"], "inspect");
+    assert_eq!(
+        inspection["data"]["paragraphs"].as_array().unwrap().len(),
+        2
+    );
+    let revision = inspection["data"]["source_revision"].as_str().unwrap();
+
+    let design = directory.path().join("design-system");
+    fs::create_dir_all(&design).unwrap();
+    fs::write(
+        design.join("design-system.yaml"),
+        "schema: compositor.dev/design-system/v1\nid: edgar-v1\nname: Edgar\nversion: 1\n",
+    )
+    .unwrap();
+    fs::write(
+        design.join("spread-roles.yaml"),
+        "roles:\n  opening-wonder:\n    energy: { min: 1, max: 3 }\n  reveal:\n    energy: { min: 4, max: 5 }\n",
+    )
+    .unwrap();
+    fs::write(
+        design.join("validation-rules.yaml"),
+        "page_turns: [reveal]\npacing: { high_energy_threshold: 4, max_consecutive_high_energy: 2 }\n",
+    )
+    .unwrap();
+    let flow = directory.path().join("story.flow.yaml");
+    fs::write(
+        &flow,
+        format!(
+            "schema: compositor.dev/story-flow/v1\nstory:\n  id: map\n  source_revision: {revision}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: opening-rain }}\n      through: {{ type: paragraph, id: opening-rain }}\n    role: opening-wonder\n    energy: 2\n    narrative: {{ purpose: Open the library. }}\n  - id: spread-002\n    source:\n      from: {{ type: paragraph, id: map-revealed }}\n      through: {{ type: paragraph, id: map-revealed }}\n    role: reveal\n    energy: 4\n    narrative: {{ purpose: Reveal the map. }}\n"
+        ),
+    )
+    .unwrap();
+    let validation = Command::new(binary)
+        .args([
+            "--format",
+            "json",
+            "validate-flow",
+            story.to_str().unwrap(),
+            flow.to_str().unwrap(),
+            "--design-system",
+            design.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        validation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validation.stderr)
+    );
+    assert!(String::from_utf8(validation.stdout)
+        .unwrap()
+        .contains("validate-flow"));
+}
