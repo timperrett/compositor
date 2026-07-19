@@ -374,6 +374,7 @@ fn set_art_relationship(
     storage::save_manifest(root, config, &manifest)
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct BuildOutput {
     wrote_manifest_revision: Option<u64>,
@@ -382,6 +383,7 @@ struct BuildOutput {
     changes: ChangeSet,
 }
 
+#[allow(dead_code)]
 fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(), AppError> {
     let config_path = root.join("compositor.toml");
     let readme_path = root.join("README.md");
@@ -419,11 +421,13 @@ fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(),
     )
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct InitOutput {
     root: String,
 }
 
+#[allow(dead_code)]
 const PROJECT_README: &str = r#"# Compositor project
 
 This directory is a Compositor project. Write stories in Markdown, then use
@@ -503,6 +507,7 @@ A change to either setting (or the recto setting) creates a new page-plan
 revision on the next build without rewriting an unchanged source manifest.
 "#;
 
+#[allow(dead_code)]
 fn proof_command(
     root: &std::path::Path,
     config: &Config,
@@ -568,6 +573,7 @@ fn proof_command(
     )
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct ProofOutput {
     stories: Vec<String>,
