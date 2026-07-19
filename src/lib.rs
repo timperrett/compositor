@@ -14,6 +14,7 @@ pub(crate) mod identity;
 pub(crate) mod manifest;
 pub(crate) mod markdown;
 pub mod model;
+pub mod overrides;
 pub(crate) mod planning;
 pub(crate) mod proof;
 pub(crate) mod report;
