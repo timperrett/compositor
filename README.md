@@ -42,6 +42,11 @@ single `usage: opener` art record. Narrative `spreads` are distinct and may
 reference only `usage: story` art. Package builds emit the opener under
 `opener/` and never treat it as `spread-001`.
 
+Use `compositor art coverage --story <story-id> --edition <edition> --format json`
+to inspect the opener separately and identify each narrative spread as covered,
+missing, invalid, or needing a legacy-art mapping. Story art referenced by a
+Composition Plan must declare that spread in `source.spread_ids`.
+
 ## Package builds
 
 Build delivery packages by naming a compendium, with an optional story target:
@@ -78,7 +83,7 @@ modify source Markdown or assets.
 Artwork intent, generation prompts, candidates, feedback, and selections live
 in human- and skill-authored YAML files at `art/briefs/<art-id>.yaml`.
 Compositor validates these records against the current illustration requirement
-but does not generate or revise them. See `docs/art-protocol.md` for the v1
+but does not generate or revise them. See `docs/art-protocol.md` for the v2
 format and complete examples. Use `compositor art validate --strict` before
 generation or promotion, and `compositor art attach <art-id> --selected` to
 copy the selected draft candidate into `assets/approved/`.

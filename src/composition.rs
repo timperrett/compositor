@@ -92,6 +92,13 @@ pub struct ArtReference {
     pub role: String,
 }
 
+struct ArtReferenceExpectation<'a> {
+    usage: ArtUsage,
+    code: &'a str,
+    message: &'a str,
+    spread_id: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DesignDescriptor {
@@ -407,15 +414,25 @@ pub fn validate(
 
 pub fn validate_art_usage(
     root: &Path,
+    flow: &StoryFlowPlan,
     plan: &CompositionPlan,
 ) -> Result<ValidationReport, AppError> {
     let mut report = ValidationReport::default();
+    let flow_spread_ids = flow
+        .spreads
+        .iter()
+        .map(|spread| spread.id.clone())
+        .collect::<BTreeSet<_>>();
     validate_reference_usage(
         root,
         &plan.opener.art,
-        ArtUsage::Opener,
-        "OPENER_ART_USAGE_INVALID",
-        "opener art must be declared with usage: opener",
+        ArtReferenceExpectation {
+            usage: ArtUsage::Opener,
+            code: "OPENER_ART_USAGE_INVALID",
+            message: "opener art must be declared with usage: opener",
+            spread_id: None,
+        },
+        &flow_spread_ids,
         &mut report,
     )?;
     for spread in &plan.spreads {
@@ -423,9 +440,13 @@ pub fn validate_art_usage(
             validate_reference_usage(
                 root,
                 asset,
-                ArtUsage::Story,
-                "OPENER_ART_ON_STORY_SPREAD",
-                "opener art may only appear in the composition opener",
+                ArtReferenceExpectation {
+                    usage: ArtUsage::Story,
+                    code: "OPENER_ART_ON_STORY_SPREAD",
+                    message: "opener art may only appear in the composition opener",
+                    spread_id: Some(&spread.id),
+                },
+                &flow_spread_ids,
                 &mut report,
             )?;
         }
@@ -450,14 +471,45 @@ pub fn validate_story_title(story: &Story, plan: &CompositionPlan) -> Validation
 fn validate_reference_usage(
     root: &Path,
     asset: &ArtReference,
-    expected: ArtUsage,
-    code: &str,
-    message: &str,
+    expectation: ArtReferenceExpectation<'_>,
+    flow_spread_ids: &BTreeSet<String>,
     report: &mut ValidationReport,
 ) -> Result<(), AppError> {
     match art_brief::load(root, &asset.id)? {
-        Some(brief) if brief.usage == expected => {}
-        Some(_) => issue(report, code, message, "art/briefs", Some(&asset.id)),
+        Some(brief) if brief.usage == expectation.usage => {
+            if let Some(spread_id) = expectation.spread_id {
+                if brief
+                    .source
+                    .spread_ids
+                    .iter()
+                    .any(|id| !flow_spread_ids.contains(id))
+                {
+                    issue(
+                        report,
+                        "STORY_ART_SPREAD_UNKNOWN",
+                        "story art declares a spread ID absent from this Flow Plan",
+                        "art/briefs",
+                        Some(&asset.id),
+                    );
+                }
+                if !brief.source.spread_ids.iter().any(|id| id == spread_id) {
+                    issue(
+                        report,
+                        "STORY_ART_SPREAD_MISMATCH",
+                        "story art must declare the narrative spread that references it",
+                        "art/briefs",
+                        Some(spread_id),
+                    );
+                }
+            }
+        }
+        Some(_) => issue(
+            report,
+            expectation.code,
+            expectation.message,
+            "art/briefs",
+            Some(&asset.id),
+        ),
         None => issue(
             report,
             "COMPOSITION_ART_BRIEF_MISSING",
@@ -491,6 +543,40 @@ mod tests {
     use super::*;
     use crate::flow::{FlowSpread, FlowStory, Narrative, SourceRange, SourceRef};
     use std::fs;
+
+    fn single_spread_flow() -> StoryFlowPlan {
+        StoryFlowPlan {
+            schema: crate::flow::STORY_FLOW_SCHEMA.into(),
+            story: FlowStory {
+                id: "story".into(),
+                source: None,
+                source_revision: "sha256:x".into(),
+            },
+            spreads: vec![FlowSpread {
+                id: "spread-001".into(),
+                source: SourceRange {
+                    from: SourceRef {
+                        kind: "paragraph".into(),
+                        id: "one".into(),
+                    },
+                    through: SourceRef {
+                        kind: "paragraph".into(),
+                        id: "one".into(),
+                    },
+                },
+                role: "reveal".into(),
+                energy: 4,
+                narrative: Narrative {
+                    purpose: "Reveal".into(),
+                    reader_question: None,
+                    page_turn_in: None,
+                    page_turn_out: None,
+                },
+                constraints: Default::default(),
+            }],
+            notes: vec![],
+        }
+    }
 
     #[test]
     fn rejects_unknown_layouts_and_missing_flow_spreads() {
@@ -605,10 +691,72 @@ mod tests {
                 }],
             }],
         };
-        let report = validate_art_usage(directory.path(), &plan).unwrap();
+        let report = validate_art_usage(directory.path(), &single_spread_flow(), &plan).unwrap();
         assert!(report
             .issues
             .iter()
             .any(|issue| issue.code == "OPENER_ART_ON_STORY_SPREAD"));
+    }
+
+    #[test]
+    fn rejects_story_art_linked_to_a_different_spread() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/opener.yaml"),
+            "schema_version: 2\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("art/briefs/story-art.yaml"),
+            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-002] }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
+        )
+        .unwrap();
+        let mut plan = CompositionPlan {
+            schema: COMPOSITION_PLAN_SCHEMA.into(),
+            story: CompositionStory {
+                id: "story".into(),
+                flow: "story.flow.yaml".into(),
+            },
+            edition: Edition {
+                id: "hardcover".into(),
+                design_system: "edgar-v1".into(),
+            },
+            opener: StoryOpener {
+                title: "Story".into(),
+                placement: OpenerPlacement::CenterPage,
+                art: ArtReference {
+                    id: "opener".into(),
+                    role: "primary-subject".into(),
+                },
+            },
+            spreads: vec![CompositionSpread {
+                id: "spread-001".into(),
+                layout: LayoutChoice {
+                    family: "environment-led".into(),
+                    variant: "opening-quiet-upper-left".into(),
+                },
+                text: TextIntent {
+                    density: "light".into(),
+                },
+                illustration: IllustrationIntent {
+                    mode: "scene".into(),
+                    focal_subject: "Story opening".into(),
+                    viewpoint: None,
+                    scale: None,
+                    quiet_region: Some("upper-left".into()),
+                },
+                art_assets: vec![],
+            }],
+        };
+        plan.spreads[0].art_assets.push(ArtReference {
+            id: "story-art".into(),
+            role: "primary-subject".into(),
+        });
+        let report = validate_art_usage(directory.path(), &single_spread_flow(), &plan).unwrap();
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "STORY_ART_SPREAD_MISMATCH"));
     }
 }

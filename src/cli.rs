@@ -211,6 +211,12 @@ enum ArtCommand {
     Brief {
         art_id: String,
     },
+    Coverage {
+        #[arg(long)]
+        story: String,
+        #[arg(long)]
+        edition: String,
+    },
     Validate {
         #[arg(long)]
         story: Option<String>,
@@ -793,7 +799,7 @@ fn validate_composition(
     let mut report = composition::validate(&flow_plan, &plan, &catalog);
     report
         .issues
-        .extend(composition::validate_art_usage(root, &plan)?.issues);
+        .extend(composition::validate_art_usage(root, &flow_plan, &plan)?.issues);
     report
         .issues
         .extend(composition::validate_story_title(&story, &plan).issues);
@@ -1024,9 +1030,9 @@ fn build_package(
     let composition_plan = composition::load_plan(composition_path)?;
     let catalog = composition::load_catalog(design_system)?;
     let mut report = composition::validate(&flow_plan, &composition_plan, &catalog);
-    report
-        .issues
-        .extend(composition::validate_art_usage(project_root, &composition_plan)?.issues);
+    report.issues.extend(
+        composition::validate_art_usage(project_root, &flow_plan, &composition_plan)?.issues,
+    );
     report
         .issues
         .extend(composition::validate_story_title(&story, &composition_plan).issues);

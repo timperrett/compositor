@@ -1,5 +1,11 @@
 use super::*;
-use crate::assets::{self, AssetRecord, AssetRegistry, AssetStatus};
+use crate::art_brief::ArtUsage;
+use crate::assets::{AssetRecord, AssetRegistry, AssetStatus};
+use crate::composition::{ArtReference, IllustrationIntent};
+use crate::flow::{SourceRange, StoryFlowPlan};
+use crate::model::Story;
+use std::collections::BTreeMap;
+use std::path::Path;
 
 #[derive(Debug, Serialize)]
 struct ArtListItem {
@@ -16,6 +22,56 @@ struct ArtListItem {
     candidate_count: usize,
     selected_candidate: Option<String>,
     approved_artwork: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CoverageStatus {
+    Covered,
+    Missing,
+    Invalid,
+    NeedsMapping,
+}
+
+#[derive(Debug, Serialize)]
+struct CoverageAsset {
+    id: String,
+    role: String,
+    status: CoverageStatus,
+    registry_status: Option<AssetStatus>,
+    brief_path: Option<String>,
+    spread_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenerCoverage {
+    art: CoverageAsset,
+}
+
+#[derive(Debug, Serialize)]
+struct SpreadCoverage {
+    id: String,
+    source: SourceRange,
+    illustration: IllustrationIntent,
+    status: CoverageStatus,
+    art_assets: Vec<CoverageAsset>,
+    legacy_candidates: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyCoverage {
+    art_id: String,
+    anchor_id: String,
+    candidate_spread_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ArtCoverage {
+    story_id: String,
+    edition_id: String,
+    opener: OpenerCoverage,
+    spreads: Vec<SpreadCoverage>,
+    legacy_briefs: Vec<LegacyCoverage>,
 }
 
 pub(super) fn art_command(
@@ -107,6 +163,9 @@ pub(super) fn art_command(
             required_art_requirement(root, config, &art_id)?;
             let output = art_brief::inspect(root, config, &art_id);
             print_report(format, "art brief", output, ValidationReport::default())
+        }
+        ArtCommand::Coverage { story, edition } => {
+            art_coverage(root, config, format, &story, &edition)
         }
         ArtCommand::Validate { story, strict } => {
             let project = discover(root, config)?;
@@ -231,6 +290,229 @@ pub(super) fn art_command(
             print_report(format, "art attach", relative, ValidationReport::default())
         }
     }
+}
+
+fn art_coverage(
+    root: &Path,
+    config: &Config,
+    format: OutputFormat,
+    story_id: &str,
+    edition_id: &str,
+) -> Result<(), AppError> {
+    let project = discover(root, config)?;
+    let story = project
+        .compendiums
+        .iter()
+        .flat_map(|compendium| &compendium.stories)
+        .find(|story| story.id == story_id)
+        .cloned()
+        .ok_or_else(|| AppError::command(format!("unknown story `{story_id}`")))?;
+    let story_path = root.join(&story.source);
+    let directory = story_path.parent().ok_or_else(|| {
+        AppError::command(format!("story has no parent directory: {}", story.source))
+    })?;
+    let flow_path = directory.join("story.flow.yaml");
+    let composition_path = directory.join(format!("{edition_id}.composition.yaml"));
+    let flow = flow::load_plan(&flow_path)?;
+    let composition = composition::load_plan(&composition_path)?;
+    let registry = assets::load(root)?;
+
+    let opener = OpenerCoverage {
+        art: coverage_asset(
+            root,
+            registry.as_ref(),
+            &composition.opener.art,
+            ArtUsage::Opener,
+            None,
+        )?,
+    };
+    let legacy = legacy_coverage(root, &story, &flow)?;
+    let mut spreads = Vec::new();
+    for flow_spread in &flow.spreads {
+        let composition_spread = composition
+            .spreads
+            .iter()
+            .find(|spread| spread.id == flow_spread.id)
+            .ok_or_else(|| {
+                AppError::command(format!("missing composition for {}", flow_spread.id))
+            })?;
+        let art_assets = composition_spread
+            .art_assets
+            .iter()
+            .map(|asset| {
+                coverage_asset(
+                    root,
+                    registry.as_ref(),
+                    asset,
+                    ArtUsage::Story,
+                    Some(&flow_spread.id),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let legacy_candidates = legacy
+            .iter()
+            .filter(|entry| entry.candidate_spread_id.as_deref() == Some(&flow_spread.id))
+            .map(|entry| entry.art_id.clone())
+            .collect::<Vec<_>>();
+        let status = aggregate_coverage(&art_assets, !legacy_candidates.is_empty());
+        spreads.push(SpreadCoverage {
+            id: flow_spread.id.clone(),
+            source: flow_spread.source.clone(),
+            illustration: composition_spread.illustration.clone(),
+            status,
+            art_assets,
+            legacy_candidates,
+        });
+    }
+    let mut validation = composition::validate_art_usage(root, &flow, &composition)?;
+    validation
+        .issues
+        .extend(composition::validate_story_title(&story, &composition).issues);
+    let output = ArtCoverage {
+        story_id: story.id,
+        edition_id: edition_id.into(),
+        opener,
+        spreads,
+        legacy_briefs: legacy,
+    };
+    print_report(format, "art coverage", output, validation.clone())?;
+    if validation.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn coverage_asset(
+    root: &Path,
+    registry: Option<&AssetRegistry>,
+    asset: &ArtReference,
+    expected_usage: ArtUsage,
+    spread_id: Option<&str>,
+) -> Result<CoverageAsset, AppError> {
+    let registry_status = registry
+        .and_then(|registry| assets::record(registry, &asset.id))
+        .map(|record| record.status);
+    let brief = art_brief::load(root, &asset.id)?;
+    let brief_path = brief
+        .as_ref()
+        .map(|_| format!("art/briefs/{}.yaml", asset.id));
+    let spread_ids = brief
+        .as_ref()
+        .map(|brief| brief.source.spread_ids.clone())
+        .unwrap_or_default();
+    let status = match brief {
+        None => CoverageStatus::Invalid,
+        Some(brief) if registry_status.is_none() || brief.usage != expected_usage => {
+            CoverageStatus::Invalid
+        }
+        Some(brief)
+            if expected_usage == ArtUsage::Opener && !brief.source.spread_ids.is_empty() =>
+        {
+            CoverageStatus::Invalid
+        }
+        Some(brief) if spread_id.is_some() && brief.source.spread_ids.is_empty() => {
+            CoverageStatus::NeedsMapping
+        }
+        Some(brief)
+            if spread_id.is_some_and(|spread_id| {
+                !brief.source.spread_ids.iter().any(|id| id == spread_id)
+            }) =>
+        {
+            CoverageStatus::Invalid
+        }
+        Some(_) => CoverageStatus::Covered,
+    };
+    Ok(CoverageAsset {
+        id: asset.id.clone(),
+        role: asset.role.clone(),
+        status,
+        registry_status,
+        brief_path,
+        spread_ids,
+    })
+}
+
+fn aggregate_coverage(assets: &[CoverageAsset], has_legacy_candidate: bool) -> CoverageStatus {
+    if assets.is_empty() {
+        return if has_legacy_candidate {
+            CoverageStatus::NeedsMapping
+        } else {
+            CoverageStatus::Missing
+        };
+    }
+    if assets
+        .iter()
+        .any(|asset| matches!(asset.status, CoverageStatus::Invalid))
+    {
+        CoverageStatus::Invalid
+    } else if assets
+        .iter()
+        .any(|asset| matches!(asset.status, CoverageStatus::NeedsMapping))
+    {
+        CoverageStatus::NeedsMapping
+    } else {
+        CoverageStatus::Covered
+    }
+}
+
+fn legacy_coverage(
+    root: &Path,
+    story: &Story,
+    flow: &StoryFlowPlan,
+) -> Result<Vec<LegacyCoverage>, AppError> {
+    let mut entries = Vec::new();
+    for art_id in art_brief::ids(root)? {
+        let Some(brief) = art_brief::load(root, &art_id)? else {
+            continue;
+        };
+        if brief.usage == ArtUsage::Story
+            && brief.source.story_id == story.id
+            && brief.source.spread_ids.is_empty()
+        {
+            entries.push(LegacyCoverage {
+                art_id,
+                anchor_id: brief.source.anchor_id.clone(),
+                candidate_spread_id: anchor_candidate_spread(story, flow, &brief.source.anchor_id),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+fn anchor_candidate_spread(story: &Story, flow: &StoryFlowPlan, anchor_id: &str) -> Option<String> {
+    let unit = story
+        .units
+        .iter()
+        .find(|unit| unit.directives.anchor.as_deref() == Some(anchor_id))?;
+    let paragraph_id = story
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.source_start >= unit.source_start)?
+        .id
+        .as_deref()?;
+    let positions = story
+        .paragraphs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, paragraph)| paragraph.id.as_deref().map(|id| (id, index)))
+        .collect::<BTreeMap<_, _>>();
+    let position = *positions.get(paragraph_id)?;
+    let candidates = flow
+        .spreads
+        .iter()
+        .filter(|spread| {
+            let Some(from) = positions.get(spread.source.from.id.as_str()) else {
+                return false;
+            };
+            let Some(through) = positions.get(spread.source.through.id.as_str()) else {
+                return false;
+            };
+            *from <= position && position <= *through
+        })
+        .map(|spread| spread.id.clone())
+        .collect::<Vec<_>>();
+    (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
 fn migrate_briefs(

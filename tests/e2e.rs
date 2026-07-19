@@ -120,6 +120,42 @@ fn package_project() -> tempfile::TempDir {
     directory
 }
 
+#[test]
+fn art_coverage_reports_legacy_briefs_as_needing_mapping() {
+    let directory = package_project();
+    fs::write(
+        directory.path().join("art/briefs/first-scene.yaml"),
+        "schema_version: 2\nart_id: first-scene\nsource:\n  story_id: first\n  anchor_id: opening\ngeneration:\n  page_treatment: floating\n  prompt: A first-story scene.\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/assets.yaml"),
+        "schema: compositor.dev/art-assets/v1\nassets:\n  - id: first-opener\n    brief: art/briefs/first-opener.yaml\n    status: requested\n  - id: first-scene\n    brief: art/briefs/first-scene.yaml\n    status: requested\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let output = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "coverage",
+            "--story",
+            "first",
+            "--edition",
+            "hardcover",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{:?}", output);
+    let body = String::from_utf8(output.stdout).unwrap();
+    assert!(body.contains("needs-mapping"), "{body}");
+    assert!(body.contains("first-scene"), "{body}");
+}
+
 fn words(count: usize) -> String {
     (0..count).map(|_| "word").collect::<Vec<_>>().join(" ")
 }

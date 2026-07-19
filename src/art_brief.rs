@@ -31,6 +31,10 @@ pub struct ArtBrief {
 pub struct ArtBriefSource {
     pub story_id: String,
     pub anchor_id: String,
+    /// Narrative Flow Plan spreads represented by this art.  Empty is retained
+    /// for legacy story briefs until they are explicitly mapped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spread_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -194,6 +198,32 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
             Severity::Error,
             "unsupported_art_brief_version",
             format!("art brief schema_version must be {ART_BRIEF_VERSION}"),
+            &brief_path,
+            Some(&brief.source.story_id),
+            Some(&brief.art_id),
+        );
+    }
+    let mut spread_ids = BTreeSet::new();
+    for spread_id in &brief.source.spread_ids {
+        if spread_id.trim().is_empty() || !spread_ids.insert(spread_id) {
+            push(
+                &mut report,
+                Severity::Error,
+                "invalid_art_brief_spread_ids",
+                "source.spread_ids must contain unique, non-empty spread IDs".into(),
+                &brief_path,
+                Some(&brief.source.story_id),
+                Some(&brief.art_id),
+            );
+            break;
+        }
+    }
+    if brief.usage == ArtUsage::Opener && !brief.source.spread_ids.is_empty() {
+        push(
+            &mut report,
+            Severity::Error,
+            "opener_art_spread_link_invalid",
+            "opener art must not declare source.spread_ids".into(),
             &brief_path,
             Some(&brief.source.story_id),
             Some(&brief.art_id),
@@ -491,6 +521,19 @@ generation:
 
         let spot: ArtBrief = serde_yaml::from_str(&BRIEF.replace("floating", "spot")).unwrap();
         assert_eq!(spot.generation.page_treatment, PageTreatment::Spot);
+    }
+
+    #[test]
+    fn accepts_legacy_and_spread_linked_story_briefs() {
+        let legacy: ArtBrief = serde_yaml::from_str(BRIEF).unwrap();
+        assert!(legacy.source.spread_ids.is_empty());
+
+        let linked: ArtBrief = serde_yaml::from_str(&BRIEF.replace(
+            "  anchor_id: reveal\n",
+            "  anchor_id: reveal\n  spread_ids: [spread-002, spread-003]\n",
+        ))
+        .unwrap();
+        assert_eq!(linked.source.spread_ids, ["spread-002", "spread-003"]);
     }
 
     #[test]

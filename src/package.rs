@@ -14,6 +14,13 @@ pub struct PackagePolicy {
     pub strict: bool,
 }
 
+struct AssetResolution<'a> {
+    expected_usage: ArtUsage,
+    expected_spread_id: Option<&'a str>,
+    destination: &'a Path,
+    policy: PackagePolicy,
+}
+
 #[derive(Debug, Serialize)]
 struct SpreadManifest<'a> {
     schema: &'static str,
@@ -79,9 +86,12 @@ pub fn build(
         root,
         registry,
         &composition.opener.art,
-        ArtUsage::Opener,
-        &opener_directory,
-        policy,
+        AssetResolution {
+            expected_usage: ArtUsage::Opener,
+            expected_spread_id: None,
+            destination: &opener_directory,
+            policy,
+        },
         &mut report,
     )?;
     fs::write(
@@ -140,9 +150,12 @@ pub fn build(
                     root,
                     registry,
                     asset,
-                    ArtUsage::Story,
-                    &spread_directory,
-                    policy,
+                    AssetResolution {
+                        expected_usage: ArtUsage::Story,
+                        expected_spread_id: Some(&flow_spread.id),
+                        destination: &spread_directory,
+                        policy,
+                    },
                     &mut report,
                 )
             })
@@ -243,9 +256,7 @@ fn resolve_asset(
     root: &Path,
     registry: &AssetRegistry,
     asset: &ArtReference,
-    expected_usage: ArtUsage,
-    spread: &Path,
-    policy: PackagePolicy,
+    resolution: AssetResolution<'_>,
     report: &mut ValidationReport,
 ) -> Result<ArtManifest, AppError> {
     let Some(record) = assets::record(registry, &asset.id) else {
@@ -264,7 +275,7 @@ fn resolve_asset(
             report,
         ));
     };
-    if brief.usage != expected_usage {
+    if brief.usage != resolution.expected_usage {
         return Ok(unresolved(
             asset,
             "ART_USAGE_MISMATCH",
@@ -272,7 +283,17 @@ fn resolve_asset(
             report,
         ));
     }
-    if !assets::allowed(record.status, policy.minimum) {
+    if let Some(spread_id) = resolution.expected_spread_id {
+        if !brief.source.spread_ids.iter().any(|id| id == spread_id) {
+            return Ok(unresolved(
+                asset,
+                "ART_SPREAD_LINK_MISSING",
+                "story art is not linked to this narrative spread",
+                report,
+            ));
+        }
+    }
+    if !assets::allowed(record.status, resolution.policy.minimum) {
         return Ok(unresolved(
             asset,
             "ART_STATUS_BELOW_POLICY",
@@ -302,7 +323,7 @@ fn resolve_asset(
         .and_then(|value| value.to_str())
         .unwrap_or("bin");
     let file = format!("art/{}.{}", asset.id, extension);
-    fs::copy(&source_path, spread.join(&file))?;
+    fs::copy(&source_path, resolution.destination.join(&file))?;
     Ok(ArtManifest {
         id: asset.id.clone(),
         role: asset.role.clone(),
@@ -340,6 +361,7 @@ fn unresolved(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::AssetRecord;
     use crate::flow;
     use std::fs;
 
@@ -393,5 +415,51 @@ mod tests {
         );
         let manifest = fs::read_to_string(output.join("spreads/001-opening/spread.yaml")).unwrap();
         assert!(manifest.contains("file: text.txt"));
+    }
+
+    #[test]
+    fn leaves_unlinked_story_art_unresolved() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/story-art.yaml"),
+            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
+        )
+        .unwrap();
+        let registry = AssetRegistry {
+            schema: crate::assets::ASSET_REGISTRY_SCHEMA.into(),
+            assets: vec![AssetRecord {
+                id: "story-art".into(),
+                brief: "art/briefs/story-art.yaml".into(),
+                status: AssetStatus::Draft,
+                file: None,
+                superseded_by: None,
+            }],
+        };
+        let mut report = ValidationReport::default();
+        let manifest = resolve_asset(
+            directory.path(),
+            &registry,
+            &ArtReference {
+                id: "story-art".into(),
+                role: "primary-subject".into(),
+            },
+            AssetResolution {
+                expected_usage: ArtUsage::Story,
+                expected_spread_id: Some("spread-001"),
+                destination: directory.path(),
+                policy: PackagePolicy {
+                    minimum: AssetStatus::Draft,
+                    strict: false,
+                },
+            },
+            &mut report,
+        )
+        .unwrap();
+        assert!(!manifest.resolved);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "ART_SPREAD_LINK_MISSING"));
     }
 }
