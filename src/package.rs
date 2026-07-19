@@ -54,9 +54,11 @@ pub fn build(
     if policy.strict && !report.can_proceed() {
         return Err(AppError::Validation);
     }
+    let output_parent = output.parent().unwrap_or(root);
+    fs::create_dir_all(output_parent)?;
     let temporary = tempfile::Builder::new()
         .prefix(".compositor-package-")
-        .tempdir_in(output.parent().unwrap_or(root))?;
+        .tempdir_in(output_parent)?;
     let package_root = temporary.path();
     let mut guide = String::from("<!doctype html><html><body><h1>Assembly guide</h1>");
     let mut entries = Vec::new();
@@ -85,6 +87,10 @@ pub fn build(
             .collect::<Vec<_>>()
             .join("\n\n");
         fs::write(spread_directory.join("text.md"), &text)?;
+        fs::write(
+            spread_directory.join("text.txt"),
+            render_spread_text(&paragraphs),
+        )?;
         let word_count = paragraphs
             .iter()
             .map(|paragraph| paragraph.word_count)
@@ -111,7 +117,7 @@ pub fn build(
             energy: flow_spread.energy,
             layout: &composition_spread.layout,
             text: TextManifest {
-                file: "text.md",
+                file: "text.txt",
                 word_count,
                 density: composition_spread.text.density.clone(),
             },
@@ -153,6 +159,20 @@ pub fn build(
     }
     fs::rename(package_root, output)?;
     Ok(report)
+}
+
+fn render_spread_text(paragraphs: &[&crate::model::SourceParagraph]) -> String {
+    let text = paragraphs
+        .iter()
+        .map(|paragraph| crate::text::plain_text(&paragraph.content))
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("{text}\n")
+    }
 }
 
 fn source_paragraphs<'a>(
@@ -259,5 +279,60 @@ fn unresolved(
         source: None,
         file: None,
         resolved: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow;
+    use std::fs;
+
+    #[test]
+    fn creates_a_missing_parent_directory_for_package_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let story_path = directory.path().join("story.md");
+        fs::write(
+            &story_path,
+            "---\nid: story\ntitle: Story\n---\n<!-- anchor: story-opening -->\n<!-- paragraph: opening -->\n\nOnce **upon** a [time](https://example.com).\n",
+        )
+        .unwrap();
+        let story = flow::load_story(&story_path).unwrap();
+        let flow_plan: StoryFlowPlan = serde_yaml::from_str(&format!(
+            "schema: compositor.dev/story-flow/v1\nstory:\n  id: story\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: opening }}\n      through: {{ type: paragraph, id: opening }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n",
+            story.source_hash
+        ))
+        .unwrap();
+        let composition: CompositionPlan = serde_yaml::from_str(
+            "schema: compositor.dev/composition-plan/v1\nstory:\n  id: story\n  flow: story.flow.yaml\nedition:\n  id: first-edition\n  design_system: example\nspreads:\n  - id: spread-001\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n",
+        )
+        .unwrap();
+        let output = directory.path().join("delivery/first-edition/package");
+
+        build(
+            directory.path(),
+            &story,
+            &flow_plan,
+            &composition,
+            &AssetRegistry {
+                schema: assets::ASSET_REGISTRY_SCHEMA.into(),
+                assets: Vec::new(),
+            },
+            &output,
+            PackagePolicy {
+                minimum: AssetStatus::Draft,
+                strict: false,
+            },
+        )
+        .unwrap();
+
+        assert!(output.join("assembly-guide.html").is_file());
+        assert!(output.join("spreads/001-opening/text.md").is_file());
+        assert_eq!(
+            fs::read_to_string(output.join("spreads/001-opening/text.txt")).unwrap(),
+            "Once upon a time.\n"
+        );
+        let manifest = fs::read_to_string(output.join("spreads/001-opening/spread.yaml")).unwrap();
+        assert!(manifest.contains("file: text.txt"));
     }
 }
