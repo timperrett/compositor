@@ -2,11 +2,13 @@ use crate::art_brief;
 use crate::build;
 use crate::config::{Config, DEFAULT_CONFIG};
 use crate::discovery::discover;
+use crate::flow;
 use crate::model::{ChangeSet, ValidationReport};
 use crate::proof;
 use crate::report::{self, OutputFormat};
 use crate::storage;
 use crate::validation;
+use crate::{assets, composition, overrides, package};
 use crate::{project_root, AppError};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -53,6 +55,19 @@ enum Command {
     },
     Status,
     Build {
+        story_path: Option<PathBuf>,
+        flow: Option<PathBuf>,
+        composition: Option<PathBuf>,
+        #[arg(long)]
+        design_system: Option<PathBuf>,
+        #[arg(long)]
+        assets: Option<PathBuf>,
+        #[arg(long, default_value = "draft")]
+        asset_policy: String,
+        #[arg(long)]
+        strict_art: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
         #[arg(long, default_value = "conservative")]
         mode: String,
         #[arg(long)]
@@ -81,8 +96,33 @@ enum Command {
         revision: String,
     },
     Inspect {
-        kind: InspectKind,
-        id: String,
+        story: PathBuf,
+    },
+    ValidateFlow {
+        story: PathBuf,
+        flow: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    ValidateComposition {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    Diagnose {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    Reconcile {
+        composition: PathBuf,
+        overrides: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
     Resolve {
         old_id: String,
@@ -100,18 +140,42 @@ enum DiffTarget {
     },
 }
 #[derive(Debug, Clone, clap::ValueEnum)]
-enum InspectKind {
-    Story,
-    Unit,
-}
-
-#[derive(Debug, Clone, clap::ValueEnum)]
 enum ApprovalKind {
     Plan,
 }
 
 #[derive(Debug, Subcommand)]
 enum ArtCommand {
+    Registry {
+        #[arg(long)]
+        write: bool,
+    },
+    MigrateBriefs {
+        #[arg(long)]
+        write: bool,
+    },
+    Register {
+        art_id: String,
+    },
+    Select {
+        art_id: String,
+        candidate_id: String,
+        #[arg(long)]
+        feedback: Option<String>,
+    },
+    Review {
+        art_id: String,
+    },
+    ApproveAsset {
+        art_id: String,
+    },
+    Reject {
+        art_id: String,
+    },
+    Supersede {
+        art_id: String,
+        successor: String,
+    },
     List {
         #[arg(long)]
         story: Option<String>,
@@ -141,6 +205,29 @@ pub fn run() -> Result<(), AppError> {
     let root = project_root(cli.root)?;
     match cli.command {
         Command::Init { force } => build_commands::init(&root, force, cli.format),
+        Command::Inspect { story } => inspect_source(&story, cli.format),
+        Command::ValidateFlow {
+            story,
+            flow: flow_path,
+            design_system,
+        } => validate_flow(&story, &flow_path, &design_system, cli.format),
+        Command::ValidateComposition {
+            story,
+            flow,
+            composition: plan,
+            design_system,
+        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        Command::Diagnose {
+            story,
+            flow,
+            composition: plan,
+            design_system,
+        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        Command::Reconcile {
+            composition: plan,
+            overrides: overrides_path,
+            output,
+        } => reconcile_composition(&plan, &overrides_path, &output, cli.format),
         command => execute(&root, cli.format, command),
     }
 }
@@ -217,7 +304,31 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                 ValidationReport::default(),
             )
         }
-        Command::Build { mode, story } => {
+        Command::Build {
+            story_path,
+            flow,
+            composition: composition_path,
+            design_system,
+            assets: assets_path,
+            asset_policy,
+            strict_art,
+            output,
+            mode,
+            story,
+        } => {
+            if let Some(story_path) = story_path {
+                return build_package(
+                    &story_path,
+                    flow.as_deref(),
+                    composition_path.as_deref(),
+                    design_system.as_deref(),
+                    assets_path.as_deref(),
+                    output.as_deref(),
+                    &asset_policy,
+                    strict_art,
+                    format,
+                );
+            }
             let mode = parse_mode(&mode)?;
             let (prepared, manifest, plans) =
                 build::build_with_mode(root, &config, story.as_deref(), mode)?;
@@ -272,7 +383,11 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             };
             print_report(format, "approve", file, ValidationReport::default())
         }
-        Command::Inspect { kind, id } => inspect(root, &config, format, kind, &id),
+        Command::Inspect { .. }
+        | Command::ValidateFlow { .. }
+        | Command::ValidateComposition { .. }
+        | Command::Diagnose { .. }
+        | Command::Reconcile { .. } => unreachable!(),
         Command::Resolve { old_id, new_id } => {
             let mut resolutions = storage::load_resolutions(root, &config)?;
             resolutions.mappings.insert(old_id.clone(), new_id.clone());
@@ -368,33 +483,361 @@ fn set_art_relationship(
     storage::save_manifest(root, config, &manifest)
 }
 
-fn inspect(
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct BuildOutput {
+    wrote_manifest_revision: Option<u64>,
+    plans: Vec<String>,
+    text_exports: Vec<String>,
+    changes: ChangeSet,
+}
+
+#[allow(dead_code)]
+fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(), AppError> {
+    let config_path = root.join("compositor.toml");
+    let readme_path = root.join("README.md");
+    if (config_path.exists() || readme_path.exists()) && !force {
+        return Err(AppError::Command(format!(
+            "{} or {} already exists; use --force to replace generated project files",
+            config_path.display(),
+            readme_path.display()
+        )));
+    }
+    fs::create_dir_all(root.join("compendiums"))?;
+    fs::create_dir_all(root.join("canon"))?;
+    fs::create_dir_all(root.join("assets/references"))?;
+    fs::create_dir_all(root.join("assets/drafts"))?;
+    fs::create_dir_all(root.join("assets/approved"))?;
+    fs::create_dir_all(root.join(".compositor"))?;
+    fs::create_dir_all(root.join(".compositor/state"))?;
+    fs::create_dir_all(root.join(".compositor/plans"))?;
+    fs::create_dir_all(root.join(".compositor/requirements"))?;
+    fs::create_dir_all(root.join(".compositor/layouts"))?;
+    fs::create_dir_all(root.join(".compositor/history"))?;
+    fs::create_dir_all(root.join(".compositor/locks"))?;
+    fs::create_dir_all(root.join("output/reports"))?;
+    fs::create_dir_all(root.join("output/proofs"))?;
+    fs::create_dir_all(root.join("output/text"))?;
+    fs::write(config_path, DEFAULT_CONFIG)?;
+    fs::write(readme_path, PROJECT_README)?;
+    print_report(
+        format,
+        "init",
+        InitOutput {
+            root: root.display().to_string(),
+        },
+        ValidationReport::default(),
+    )
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct InitOutput {
+    root: String,
+}
+
+#[allow(dead_code)]
+const PROJECT_README: &str = r#"# Compositor project
+
+This directory is a Compositor project. Write stories in Markdown, then use
+`compositor build` to create deterministic production state and page proofs.
+
+## Directory guide
+
+- `compendiums/` contains the authored books. Each numbered compendium directory
+  has an `index.md` plus numbered story Markdown files. Filename order controls
+  reading order; front-matter `id` values provide stable identities.
+- `canon/` holds optional continuity and style notes for authors and assistants.
+  Compositor leaves these Markdown files unchanged.
+- `assets/references/` stores source reference material; `assets/drafts/` holds
+  in-progress art; `assets/approved/` holds artwork you want to preserve.
+- `.compositor/` is generated state: the current manifest, immutable history,
+  page-plan and illustration-requirement revisions, and
+  any manual identity resolutions. Do not edit it by hand.
+- `output/reports/`, `output/proofs/`, and `output/text/` contain generated
+  review and layout artifacts. HTML proofs are written to `output/proofs/`;
+  plain-text files for import into a layout application are written to
+  `output/text/`. Do not edit generated output as manuscript source.
+
+## Authoring a story
+
+Each story needs YAML front matter with a stable `id` and `title`:
+
+```markdown
+---
+id: the-hidden-shelf
+title: The Hidden Shelf
+---
+
+Edgar woke before the castle bells.
+
+---
+
+<!-- anchor: hidden-shelf-reveal -->
+He found the hidden shelf behind the tapestry.
+```
+
+A top-level `---` creates a content unit. Use anchors for units that need a
+stable external relationship, such as artwork. Optional production directives
+include `art`, `layout`, `keep-with-next`, and `unit`; see `compositor --help`.
+
+## Normal workflow
+
+1. Run `compositor validate` after adding or editing stories.
+2. Run `compositor build --mode conservative` to retain unaffected page
+   assignments. Use `rebalance` or `fresh` only when you explicitly want a
+   complete candidate repagination. It also refreshes plain-text layout exports
+   in `output/text/`.
+3. Run `compositor status --format json` for a machine-readable change report.
+4. Run `compositor proof` to generate HTML proofs.
+
+Art directives and artwork-oriented layouts create an illustration requirement.
+Create a matching skill-authored YAML record at `art/briefs/<art-id>.yaml`; it
+contains the generation prompt, candidates, feedback, and selection. Run
+`compositor art validate --strict` before generation or promotion. Use
+`compositor art list`, `compositor art inspect <art-id>`, and `compositor art
+brief <art-id>` to review artwork state. Promote a selected candidate with
+`compositor art attach <art-id> --selected`; source files and approved artifacts
+are never edited in place by Compositor.
+
+Use `compositor resolve <old-id> <new-id>` only to record a deliberate manual
+identity match that Compositor could not determine automatically.
+
+## Pagination capacity
+
+The `[pagination]` settings in `compositor.toml` determine text-page packing.
+`target_words_per_text_page` is the preferred density; long text units are
+automatically split at the nearest paragraph or sentence boundary within the
+maximum. A word-boundary split is used only when a single sentence exceeds the
+maximum.
+`maximum_words_per_text_page` is the hard cap when combining fragments or
+units (except an explicit `keep-with-next` constraint, which emits a warning).
+A change to either setting (or the recto setting) creates a new page-plan
+revision on the next build without rewriting an unchanged source manifest.
+"#;
+
+#[allow(dead_code)]
+fn proof_command(
     root: &std::path::Path,
     config: &Config,
     format: OutputFormat,
-    kind: InspectKind,
-    id: &str,
+    story_filter: Option<&str>,
 ) -> Result<(), AppError> {
     let manifest = storage::load_manifest(root, config)?
         .ok_or_else(|| AppError::Command("no manifest exists; run build first".into()))?;
-    let value = match kind {
-        InspectKind::Story => serde_json::to_value(
-            manifest
-                .stories
-                .get(id)
-                .ok_or_else(|| AppError::Command(format!("unknown story `{id}`")))?,
-        ),
-        InspectKind::Unit => serde_json::to_value(
-            manifest
-                .stories
-                .values()
-                .flat_map(|story| story.units.iter())
-                .find(|unit| unit.id == id)
-                .ok_or_else(|| AppError::Command(format!("unknown unit `{id}`")))?,
-        ),
+    let project = discover(root, config)?;
+    let mut paths = Vec::new();
+    let mut compendium_indexes = Vec::new();
+    for compendium in project.compendiums {
+        let mut compendium_stories = Vec::new();
+        for story in compendium.stories {
+            if story_filter.is_some_and(|filter| filter != story.id) {
+                continue;
+            }
+            let plan = storage::load_active_plan(root, config, &story.id)?
+                .or(storage::load_latest_plan(root, config, &story.id)?)
+                .ok_or_else(|| {
+                    AppError::Command(format!("no plan for {}; run build first", story.id))
+                })?;
+            let manifest_story = manifest.stories.get(&story.id).ok_or_else(|| {
+                AppError::Command(format!("story {} absent from manifest", story.id))
+            })?;
+            let path = config
+                .output_dir(root)
+                .join("proofs")
+                .join(format!("{}.html", story.id));
+            fs::create_dir_all(path.parent().expect("proof parent"))?;
+            fs::write(&path, proof::render_html(&story, &plan, manifest_story))?;
+            compendium_stories.push((story.title.clone(), format!("{}.html", story.id)));
+            paths.push(
+                path.strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+        if story_filter.is_none() && !compendium_stories.is_empty() {
+            let path = config
+                .output_dir(root)
+                .join("proofs")
+                .join(format!("{}-compendium.html", compendium.id));
+            fs::write(
+                &path,
+                proof::render_compendium_html(&compendium.title, &compendium_stories),
+            )?;
+            compendium_indexes.push(relative_path(root, &path));
+        }
     }
-    .map_err(|error| AppError::serialization(error.to_string()))?;
-    print_report(format, "inspect", value, ValidationReport::default())
+    if paths.is_empty() {
+        return Err(AppError::Command("no matching stories to prove".into()));
+    }
+    print_report(
+        format,
+        "proof",
+        ProofOutput {
+            stories: paths,
+            compendium_indexes,
+        },
+        ValidationReport::default(),
+    )
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+struct ProofOutput {
+    stories: Vec<String>,
+    compendium_indexes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceInspection {
+    story: String,
+    source_revision: String,
+    paragraphs: Vec<crate::model::SourceParagraph>,
+}
+
+fn inspect_source(path: &std::path::Path, format: OutputFormat) -> Result<(), AppError> {
+    let story = flow::load_story(path)?;
+    let validation = flow::source_report(&story);
+    print_report(
+        format,
+        "inspect",
+        SourceInspection {
+            story: story.id,
+            source_revision: story.source_hash,
+            paragraphs: story.paragraphs,
+        },
+        validation,
+    )
+}
+
+fn validate_flow(
+    story_path: &std::path::Path,
+    flow_path: &std::path::Path,
+    design_system: &std::path::Path,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let story = flow::load_story(story_path)?;
+    let plan = flow::load_plan(flow_path)?;
+    let design = flow::load_design_system(design_system)?;
+    let report = flow::validate(&story, &plan, &design);
+    print_report(format, "validate-flow", &plan, report.clone())?;
+    if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn validate_composition(
+    story_path: &std::path::Path,
+    flow_path: &std::path::Path,
+    composition_path: &std::path::Path,
+    design_system: &std::path::Path,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let _story = flow::load_story(story_path)?;
+    let flow_plan = flow::load_plan(flow_path)?;
+    let plan = composition::load_plan(composition_path)?;
+    let catalog = composition::load_catalog(design_system)?;
+    let report = composition::validate(&flow_plan, &plan, &catalog);
+    print_report(format, "validate-composition", &plan, report.clone())?;
+    if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn reconcile_composition(
+    composition_path: &std::path::Path,
+    overrides_path: &std::path::Path,
+    output: &std::path::Path,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let plan = composition::load_plan(composition_path)?;
+    let values = overrides::load(overrides_path)?;
+    let (resolved, report) = overrides::reconcile(&plan, &values);
+    if report.can_proceed() {
+        overrides::write(output, &resolved)?;
+    }
+    print_report(format, "reconcile", resolved, report.clone())?;
+    if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_package(
+    story_path: &std::path::Path,
+    flow_path: Option<&std::path::Path>,
+    composition_path: Option<&std::path::Path>,
+    design_system: Option<&std::path::Path>,
+    assets_path: Option<&std::path::Path>,
+    output: Option<&std::path::Path>,
+    policy: &str,
+    strict_art: bool,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let flow_path =
+        flow_path.ok_or_else(|| AppError::command("build package requires a flow plan".into()))?;
+    let composition_path = composition_path
+        .ok_or_else(|| AppError::command("build package requires a composition plan".into()))?;
+    let design_system = design_system
+        .ok_or_else(|| AppError::command("build package requires --design-system".into()))?;
+    let assets_path =
+        assets_path.ok_or_else(|| AppError::command("build package requires --assets".into()))?;
+    let output =
+        output.ok_or_else(|| AppError::command("build package requires --output".into()))?;
+    let story = flow::load_story(story_path)?;
+    let flow_plan = flow::load_plan(flow_path)?;
+    let composition_plan = composition::load_plan(composition_path)?;
+    let catalog = composition::load_catalog(design_system)?;
+    let report = composition::validate(&flow_plan, &composition_plan, &catalog);
+    if !report.can_proceed() {
+        return Err(AppError::Validation);
+    }
+    let registry = assets::load_from(assets_path)?
+        .ok_or_else(|| AppError::command("asset registry does not exist".into()))?;
+    let minimum = match policy {
+        "draft" => assets::AssetStatus::Draft,
+        "review" => assets::AssetStatus::Review,
+        "approved" => assets::AssetStatus::Approved,
+        _ => {
+            return Err(AppError::command(
+                "asset policy must be draft, review, or approved".into(),
+            ))
+        }
+    };
+    let project_root = assets_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| AppError::command("asset registry must be inside art/".into()))?;
+    let validation = package::build(
+        project_root,
+        &story,
+        &flow_plan,
+        &composition_plan,
+        &registry,
+        output,
+        package::PackagePolicy {
+            minimum,
+            strict: strict_art,
+        },
+    )?;
+    print_report(
+        format,
+        "build",
+        serde_json::json!({"output": output}),
+        validation.clone(),
+    )?;
+    if validation.can_proceed() || !strict_art {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
 }
 
 fn inspect_art(

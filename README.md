@@ -7,7 +7,7 @@ into incrementally maintained book-production artifacts.
 
 ```bash
 cargo run -- init
-# Add compendiums/01-example/index.md and numbered story Markdown files.
+# Add compendiums/01-example/index.md and numbered story directories containing story.md.
 cargo run -- build --format json
 cargo run -- proof
 ```
@@ -19,9 +19,14 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 ## Commands
 
 `init`, `parse`, `validate`, `status`, `build`, `diff source`, `plan`, `proof`,
-`inspect`, and `resolve` are available. `build` and `plan` currently support
+`inspect <story.md>`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
 the conservative mode only. Use `--format json` for stable machine-readable
 reports.
+
+`inspect <story.md>` reports durable prose-paragraph identifiers and the source
+revision needed by a Story Flow Plan. `validate-flow <story.md> <story.flow.yaml>
+--design-system <directory>` validates source coverage, declared narrative
+roles, energy, and pacing without changing the manuscript.
 
 Generated state lives in `.compositor/`; HTML proofs are written to
 `output/proofs/`; layout-ready plain-text exports are written to `output/text/`

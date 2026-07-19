@@ -43,7 +43,9 @@ fn project() -> tempfile::TempDir {
         "---\nid: magic\ntitle: Magic\n---\nA collection.\n",
     )
     .unwrap();
-    fs::write(compendium.join("01-story.md"), "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\nOnce upon a time.\n\n---\nA second unit stays the same.\n").unwrap();
+    let story = compendium.join("01-story");
+    fs::create_dir_all(&story).unwrap();
+    fs::write(story.join("story.md"), "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\nOnce upon a time.\n\n---\nA second unit stays the same.\n").unwrap();
     directory
 }
 
@@ -59,7 +61,9 @@ fn replace_story_with_units(directory: &tempfile::TempDir, unit_words: &[usize])
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory
+            .path()
+            .join("compendiums/01-magic/01-story/story.md"),
         format!("---\nid: story\ntitle: Story\n---\n{units}\n"),
     )
     .unwrap();
@@ -67,7 +71,9 @@ fn replace_story_with_units(directory: &tempfile::TempDir, unit_words: &[usize])
 
 fn replace_story_with_text(directory: &tempfile::TempDir, text: &str) {
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory
+            .path()
+            .join("compendiums/01-magic/01-story/story.md"),
         format!("---\nid: story\ntitle: Story\n---\n<!-- anchor: unit-0 -->\n{text}\n"),
     )
     .unwrap();
@@ -117,12 +123,14 @@ fn unchanged_build_is_a_no_op() {
 fn build_generates_plain_text_layout_exports_without_markdown() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\n# A Story Display Title\n\n# A **bold** beginning\n\nA [linked](https://example.com) paragraph.\n\n- First item\n- Second item\n\n---\n\n> A closing quotation.\n",
     )
     .unwrap();
+    let second = directory.path().join("compendiums/01-magic/02-second");
+    fs::create_dir_all(&second).unwrap();
     fs::write(
-        directory.path().join("compendiums/01-magic/02-second.md"),
+        second.join("story.md"),
         "---\nid: second\ntitle: Second Story\n---\n# Magic\n\nSecond body.\n",
     )
     .unwrap();
@@ -154,7 +162,9 @@ fn unchanged_build_restores_missing_plain_text_export_and_source_edits_refresh_i
     let directory = project();
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let source = directory.path().join("compendiums/01-magic/01-story.md");
+    let source = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     let original_source = fs::read_to_string(&source).unwrap();
     let export = directory.path().join("output/text/story.txt");
     fs::remove_file(&export).unwrap();
@@ -179,7 +189,9 @@ fn local_edit_keeps_anchored_unit_identity() {
     let directory = project();
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let story = directory.path().join("compendiums/01-magic/01-story.md");
+    let story = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     let source = fs::read_to_string(&story)
         .unwrap()
         .replace("Once upon a time.", "Once upon a sunny time.");
@@ -205,7 +217,9 @@ fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
     replace_story_with_units(&directory, &[100, 100]);
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let story = directory.path().join("compendiums/01-magic/01-story.md");
+    let story = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     fs::write(
         &story,
         fs::read_to_string(&story).unwrap().replacen(
@@ -231,7 +245,7 @@ fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
 fn artwork_requirements_are_generated_without_legacy_briefs() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\n<!-- layout: full-spread -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -253,7 +267,7 @@ fn artwork_requirements_are_generated_without_legacy_briefs() {
 fn art_layout_controls_surface_and_requirement_geometry() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: page-art -->\n<!-- art: A page illustration. -->\n<!-- art-layout: surface=single-page orientation=portrait height=50% -->\nPage art.\n\n---\n\n<!-- anchor: spread-art -->\n<!-- art: A spread illustration. -->\n<!-- art-layout: surface=double-page-spread orientation=landscape height=50% -->\nSpread art.\n",
     )
     .unwrap();
@@ -288,7 +302,7 @@ fn art_layout_controls_surface_and_requirement_geometry() {
 fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- layout: full-page -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -313,7 +327,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
     )
     .unwrap();
     let validate = Command::new(binary)
@@ -461,7 +475,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
 fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -486,7 +500,7 @@ fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
         fs::write(
             directory.path().join("art/briefs/reveal.yaml"),
             format!(
-                "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n{treatment}  prompt: A moonlit library.\n"
+                "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n{treatment}  prompt: A moonlit library.\n"
             ),
         )
         .unwrap();
@@ -502,6 +516,55 @@ fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
             .unwrap();
         assert!(!validate.status.success());
     }
+}
+
+#[test]
+fn asset_registry_selection_review_and_approval_are_explicit() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\nEdgar opens the book.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+    fs::create_dir_all(directory.path().join("assets/drafts/reveal/r01")).unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("assets/drafts/reveal/r01/candidate-a.png"),
+        b"candidate",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/reveal.yaml"),
+        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    for arguments in [
+        vec!["art", "registry", "--write"],
+        vec!["art", "select", "reveal", "a"],
+        vec!["art", "review", "reveal"],
+        vec!["art", "approve-asset", "reveal"],
+    ] {
+        let result = Command::new(binary)
+            .args(["--root", directory.path().to_str().unwrap()])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(
+        fs::read(directory.path().join("assets/approved/reveal.png")).unwrap(),
+        b"candidate"
+    );
+    assert!(fs::read_to_string(directory.path().join("art/assets.yaml"))
+        .unwrap()
+        .contains("status: approved"));
 }
 
 #[test]
@@ -695,8 +758,9 @@ fn cli_initializes_and_builds_json_output() {
         "---\nid: magic\ntitle: Magic\n---\nNotes.\n",
     )
     .unwrap();
+    fs::create_dir_all(compendium.join("01-story")).unwrap();
     fs::write(
-        compendium.join("01-story.md"),
+        compendium.join("01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\nText.\n",
     )
     .unwrap();
@@ -719,4 +783,89 @@ fn cli_initializes_and_builds_json_output() {
     assert!(build_output.contains("\"command\": \"build\""));
     assert!(build_output.contains("\"text_exports\""));
     assert!(build_output.contains("output/text/story.txt"));
+}
+
+#[test]
+fn cli_inspects_and_validates_a_story_flow_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let story = directory.path().join("story.md");
+    fs::write(
+        &story,
+        "---\nid: map\ntitle: The Map\n---\n<!-- paragraph: opening-rain -->\n\nRain whispered.\n\n<!-- paragraph: map-revealed -->\n\nThe map shone.\n",
+    )
+    .unwrap();
+    let inspect = Command::new(binary)
+        .args(["--format", "json", "inspect", story.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    let inspection: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(inspection["command"], "inspect");
+    assert_eq!(
+        inspection["data"]["paragraphs"].as_array().unwrap().len(),
+        2
+    );
+    let revision = inspection["data"]["source_revision"].as_str().unwrap();
+
+    let design = directory.path().join("design-system");
+    fs::create_dir_all(&design).unwrap();
+    fs::write(
+        design.join("design-system.yaml"),
+        "schema: compositor.dev/design-system/v1\nid: edgar-v1\nname: Edgar\nversion: 1\n",
+    )
+    .unwrap();
+    fs::write(
+        design.join("spread-roles.yaml"),
+        "roles:\n  opening-wonder:\n    energy: { min: 1, max: 3 }\n  reveal:\n    energy: { min: 4, max: 5 }\n",
+    )
+    .unwrap();
+    fs::write(
+        design.join("validation-rules.yaml"),
+        "page_turns: [reveal]\npacing: { high_energy_threshold: 4, max_consecutive_high_energy: 2 }\n",
+    )
+    .unwrap();
+    let flow = directory.path().join("story.flow.yaml");
+    fs::write(
+        &flow,
+        format!(
+            "schema: compositor.dev/story-flow/v1\nstory:\n  id: map\n  source_revision: {revision}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: opening-rain }}\n      through: {{ type: paragraph, id: opening-rain }}\n    role: opening-wonder\n    energy: 2\n    narrative: {{ purpose: Open the library. }}\n  - id: spread-002\n    source:\n      from: {{ type: paragraph, id: map-revealed }}\n      through: {{ type: paragraph, id: map-revealed }}\n    role: reveal\n    energy: 4\n    narrative: {{ purpose: Reveal the map. }}\n"
+        ),
+    )
+    .unwrap();
+    let validation = Command::new(binary)
+        .args([
+            "--format",
+            "json",
+            "validate-flow",
+            story.to_str().unwrap(),
+            flow.to_str().unwrap(),
+            "--design-system",
+            design.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        validation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validation.stderr)
+    );
+    assert!(String::from_utf8(validation.stdout)
+        .unwrap()
+        .contains("validate-flow"));
+}
+
+#[test]
+fn flat_story_sources_are_rejected_after_the_layout_cutover() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/02-flat.md"),
+        "---\nid: flat\ntitle: Flat\n---\nThis source is in the old layout.\n",
+    )
+    .unwrap();
+    let config = Config::load(directory.path()).unwrap();
+    let error = compositor::discovery::discover(directory.path(), &config).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("flat story sources are unsupported"));
 }

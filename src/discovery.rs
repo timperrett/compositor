@@ -27,16 +27,30 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
         let parsed_index = parse_document_at(&fs::read_to_string(&index)?, &index)?;
         let id = required_metadata(&parsed_index.metadata, "id", &index)?;
         let title = required_metadata(&parsed_index.metadata, "title", &index)?;
-        let mut files = read_sorted(
+        let flat_sources = read_sorted(
             &directory,
             |path| {
-                path.extension().is_some_and(|ext| ext == "md")
+                path.extension().is_some_and(|extension| extension == "md")
                     && path.file_name().is_some_and(|name| name != "index.md")
             },
             config,
         )?;
+        if let Some(path) = flat_sources.first() {
+            return Err(AppError::config(format!(
+                "flat story sources are unsupported; move {} to a numbered directory containing story.md",
+                path.display()
+            )));
+        }
+        let mut directories = read_sorted(&directory, |path| path.is_dir(), config)?;
         let mut stories = Vec::new();
-        for (story_ordinal, path) in files.drain(..).enumerate() {
+        for (story_ordinal, story_directory) in directories.drain(..).enumerate() {
+            let path = story_directory.join("story.md");
+            if !path.is_file() {
+                return Err(AppError::config(format!(
+                    "missing story source: {}",
+                    path.display()
+                )));
+            }
             let parsed = parse_document_at(&fs::read_to_string(&path)?, &path)?;
             let story_id = required_metadata(&parsed.metadata, "id", &path)?;
             let story_title = required_metadata(&parsed.metadata, "title", &path)?;
@@ -46,8 +60,11 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
                 source: relative(root, &path),
                 ordinal: story_ordinal + 1,
                 compendium_id: id.clone(),
+                source_hash: parsed.source_hash,
                 metadata: parsed.metadata,
                 units: parsed.units,
+                paragraphs: parsed.paragraphs,
+                paragraph_comments: parsed.paragraph_comments,
             });
         }
         compendiums.push(Compendium {
