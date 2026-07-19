@@ -120,6 +120,22 @@ are never edited in place by Compositor.
 Use `compositor resolve <old-id> <new-id>` only to record a deliberate manual
 identity match that Compositor could not determine automatically.
 
+## Package builds
+
+Build a production package by naming a compendium and, optionally, one story:
+
+```bash
+compositor build <compendium-id-or-directory>
+compositor build <compendium-id-or-directory> <story-id-or-directory>
+```
+
+For each selected story, Compositor uses the conventional sibling files
+`story.md`, `story.flow.yaml`, and `hardcover.composition.yaml`, the project
+art registry `art/assets.yaml`, and the design system named by the composition
+plan at `design-systems/<design-system-id>`. Packages are written under
+`output/packages/<compendium-id>/rNN/<story-directory>/`; `rNN` is allocated
+automatically for every build invocation.
+
 ## Pagination capacity
 
 The `[pagination]` settings in `compositor.toml` determine text-page packing.

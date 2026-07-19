@@ -49,6 +49,77 @@ fn project() -> tempfile::TempDir {
     directory
 }
 
+fn package_project() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("compositor.toml"), DEFAULT_CONFIG).unwrap();
+    let compendium = directory.path().join("compendiums/01-magic");
+    fs::create_dir_all(&compendium).unwrap();
+    fs::write(
+        compendium.join("index.md"),
+        "---\nid: magic\ntitle: Magic\n---\nA collection.\n",
+    )
+    .unwrap();
+    for (directory_name, id, title) in [
+        ("01-first", "first", "First"),
+        ("02-second", "second", "Second"),
+    ] {
+        let story_directory = compendium.join(directory_name);
+        fs::create_dir_all(&story_directory).unwrap();
+        let story_path = story_directory.join("story.md");
+        fs::write(
+            &story_path,
+            format!(
+                "---\nid: {id}\ntitle: {title}\n---\n<!-- anchor: opening -->\n<!-- paragraph: {id}-opening -->\n\nOnce upon a time.\n"
+            ),
+        )
+        .unwrap();
+        let story = compositor::flow::load_story(&story_path).unwrap();
+        fs::write(
+            story_directory.join("story.flow.yaml"),
+            format!(
+                "schema: compositor.dev/story-flow/v1\nstory:\n  id: {id}\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: {id}-opening }}\n      through: {{ type: paragraph, id: {id}-opening }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n",
+                story.source_hash
+            ),
+        )
+        .unwrap();
+        fs::write(
+            story_directory.join("hardcover.composition.yaml"),
+            format!(
+                "schema: compositor.dev/composition-plan/v2\nstory:\n  id: {id}\n  flow: story.flow.yaml\nedition:\n  id: hardcover\n  design_system: edgar-v1\nopener:\n  title: {title}\n  placement: center-page\n  art: {{ id: {id}-opener, role: primary-subject }}\nspreads:\n  - id: spread-001\n    layout: {{ family: text, variant: standard }}\n    text: {{ density: standard }}\n    illustration: {{ mode: none, focal_subject: none }}\n"
+            ),
+        )
+        .unwrap();
+        let brief_directory = directory.path().join("art/briefs");
+        fs::create_dir_all(&brief_directory).unwrap();
+        fs::write(
+            brief_directory.join(format!("{id}-opener.yaml")),
+            format!(
+                "schema_version: 2\nart_id: {id}-opener\nsource:\n  story_id: {id}\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\n"
+            ),
+        )
+        .unwrap();
+    }
+    fs::write(
+        directory.path().join("art/assets.yaml"),
+        "schema: compositor.dev/art-assets/v1\nassets: []\n",
+    )
+    .unwrap();
+    let design_system = directory.path().join("design-systems/edgar-v1");
+    fs::create_dir_all(&design_system).unwrap();
+    fs::write(
+        design_system.join("design-system.yaml"),
+        "schema: compositor.dev/design-system/v1\nid: edgar-v1\nname: Edgar\nversion: 1\n",
+    )
+    .unwrap();
+    fs::write(design_system.join("spread-roles.yaml"), "roles: {}\n").unwrap();
+    fs::write(
+        design_system.join("layout-families.yaml"),
+        "layout_families:\n  text:\n    variants:\n      standard: {}\n",
+    )
+    .unwrap();
+    directory
+}
+
 fn words(count: usize) -> String {
     (0..count).map(|_| "word").collect::<Vec<_>>().join(" ")
 }
@@ -853,6 +924,67 @@ fn cli_inspects_and_validates_a_story_flow_plan() {
     assert!(String::from_utf8(validation.stdout)
         .unwrap()
         .contains("validate-flow"));
+}
+
+#[test]
+fn package_build_uses_conventional_story_inputs_and_auto_revisions() {
+    let directory = package_project();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let first = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "build",
+            "magic",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_report["data"]["revision"], "r01");
+    assert_eq!(first_report["data"]["outputs"].as_array().unwrap().len(), 2);
+    assert!(directory
+        .path()
+        .join("output/packages/magic/r01/01-first/manifest.yaml")
+        .is_file());
+    assert!(directory
+        .path()
+        .join("output/packages/magic/r01/02-second/manifest.yaml")
+        .is_file());
+
+    let second = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "build",
+            "01-magic",
+            "second",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_report: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_report["data"]["revision"], "r02");
+    assert_eq!(
+        second_report["data"]["outputs"].as_array().unwrap().len(),
+        1
+    );
+    assert!(directory
+        .path()
+        .join("output/packages/magic/r02/02-second/manifest.yaml")
+        .is_file());
 }
 
 #[test]

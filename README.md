@@ -42,6 +42,31 @@ single `usage: opener` art record. Narrative `spreads` are distinct and may
 reference only `usage: story` art. Package builds emit the opener under
 `opener/` and never treat it as `spread-001`.
 
+## Package builds
+
+Build delivery packages by naming a compendium, with an optional story target:
+
+```bash
+# Every story in the compendium.
+compositor build door-between-worlds
+
+# One story in that compendium.
+compositor build door-between-worlds world-of-lantern-tides
+```
+
+Targets may be either authored IDs or their directory names. For each selected
+story, Compositor reads the conventional sibling files `story.md`,
+`story.flow.yaml`, and `hardcover.composition.yaml`; it reads the standard art
+registry at `art/assets.yaml`; and it derives the design-system directory from
+the composition plan (`design-systems/<design-system-id>`). `--design-system`
+and `--assets` remain available as explicit overrides.
+
+Packages are written to
+`output/packages/<compendium-id>/rNN/<story-directory>/`. The revision is
+allocated automatically (`r01`, then `r02`, and so on); a multi-story build
+shares one revision. Use `--output` only when a single story needs a
+non-conventional destination.
+
 Generated state lives in `.compositor/`; HTML proofs are written to
 `output/proofs/`; layout-ready plain-text exports are written to `output/text/`
 on every successful build. Both story-level and compendium-level `.txt` files

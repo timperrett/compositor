@@ -13,7 +13,7 @@ use crate::{project_root, AppError};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[path = "cli_art_commands.rs"]
 mod art_commands;
@@ -55,22 +55,27 @@ enum Command {
     },
     Status,
     Build {
-        story_path: Option<PathBuf>,
-        flow: Option<PathBuf>,
-        composition: Option<PathBuf>,
+        /// A compendium ID or directory name. Builds every story when omitted after this target.
+        compendium: Option<String>,
+        /// A story ID or directory name within the selected compendium.
+        package_story: Option<String>,
+        /// Override the design system derived from the composition plan.
         #[arg(long)]
         design_system: Option<PathBuf>,
+        /// Override the conventional art asset registry at art/assets.yaml.
         #[arg(long)]
         assets: Option<PathBuf>,
         #[arg(long, default_value = "draft")]
         asset_policy: String,
         #[arg(long)]
         strict_art: bool,
+        /// Override the generated package destination (single-story builds only).
         #[arg(long)]
         output: Option<PathBuf>,
         #[arg(long, default_value = "conservative")]
         mode: String,
-        #[arg(long)]
+        /// Build production state for one story ID instead of a delivery package.
+        #[arg(long, conflicts_with = "compendium")]
         story: Option<String>,
     },
     Diff {
@@ -342,9 +347,8 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             )
         }
         Command::Build {
-            story_path,
-            flow,
-            composition: composition_path,
+            compendium,
+            package_story,
             design_system,
             assets: assets_path,
             asset_policy,
@@ -353,18 +357,26 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             mode,
             story,
         } => {
-            if let Some(story_path) = story_path {
-                return build_package(
-                    &story_path,
-                    flow.as_deref(),
-                    composition_path.as_deref(),
-                    design_system.as_deref(),
-                    assets_path.as_deref(),
-                    output.as_deref(),
-                    &asset_policy,
-                    strict_art,
-                    format,
+            if let Some(compendium) = compendium {
+                return build_conventional_packages(
+                    root,
+                    &config,
+                    ConventionalPackageBuildRequest {
+                        compendium_selector: &compendium,
+                        story_selector: package_story.as_deref(),
+                        design_system_override: design_system.as_deref(),
+                        assets_override: assets_path.as_deref(),
+                        output_override: output.as_deref(),
+                        policy: &asset_policy,
+                        strict_art,
+                        format,
+                    },
                 );
+            }
+            if package_story.is_some() {
+                return Err(AppError::command(
+                    "a story package target requires a compendium target".into(),
+                ));
             }
             let mode = parse_mode(&mode)?;
             let (prepared, manifest, plans) =
@@ -813,36 +825,204 @@ fn reconcile_composition(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_package(
-    story_path: &std::path::Path,
-    flow_path: Option<&std::path::Path>,
-    composition_path: Option<&std::path::Path>,
-    design_system: Option<&std::path::Path>,
-    assets_path: Option<&std::path::Path>,
-    output: Option<&std::path::Path>,
-    policy: &str,
+#[derive(Debug, Serialize)]
+struct PackageBuildOutput {
+    revision: Option<String>,
+    outputs: Vec<String>,
+}
+
+struct ConventionalPackageStory {
+    directory: PathBuf,
+}
+
+struct ConventionalPackageBuildRequest<'a> {
+    compendium_selector: &'a str,
+    story_selector: Option<&'a str>,
+    design_system_override: Option<&'a Path>,
+    assets_override: Option<&'a Path>,
+    output_override: Option<&'a Path>,
+    policy: &'a str,
     strict_art: bool,
     format: OutputFormat,
+}
+
+fn build_conventional_packages(
+    root: &Path,
+    config: &Config,
+    request: ConventionalPackageBuildRequest<'_>,
 ) -> Result<(), AppError> {
-    let flow_path =
-        flow_path.ok_or_else(|| AppError::command("build package requires a flow plan".into()))?;
-    let composition_path = composition_path
-        .ok_or_else(|| AppError::command("build package requires a composition plan".into()))?;
-    let design_system = design_system
-        .ok_or_else(|| AppError::command("build package requires --design-system".into()))?;
-    let assets_path =
-        assets_path.ok_or_else(|| AppError::command("build package requires --assets".into()))?;
-    let output =
-        output.ok_or_else(|| AppError::command("build package requires --output".into()))?;
+    let project = discover(root, config)?;
+    let compendium = project
+        .compendiums
+        .iter()
+        .find(|candidate| {
+            candidate.id == request.compendium_selector
+                || candidate
+                    .source
+                    .strip_suffix("/index.md")
+                    .and_then(|path| Path::new(path).file_name())
+                    .and_then(|name| name.to_str())
+                    == Some(request.compendium_selector)
+        })
+        .ok_or_else(|| {
+            AppError::command(format!(
+                "unknown compendium `{}`; use its ID or directory name",
+                request.compendium_selector
+            ))
+        })?;
+    let stories = compendium
+        .stories
+        .iter()
+        .filter(|candidate| {
+            request.story_selector.is_none_or(|selector| {
+                candidate.id == selector
+                    || Path::new(&candidate.source)
+                        .parent()
+                        .and_then(|path| path.file_name())
+                        .and_then(|name| name.to_str())
+                        == Some(selector)
+            })
+        })
+        .map(|candidate| ConventionalPackageStory {
+            directory: root.join(
+                Path::new(&candidate.source)
+                    .parent()
+                    .expect("story source always has a parent"),
+            ),
+        })
+        .collect::<Vec<_>>();
+    if stories.is_empty() {
+        return Err(match request.story_selector {
+            Some(selector) => AppError::command(format!(
+                "unknown story `{selector}` in compendium `{}`; use its ID or directory name",
+                compendium.id
+            )),
+            None => AppError::command(format!(
+                "compendium `{}` contains no story directories",
+                compendium.id
+            )),
+        });
+    }
+    if request.output_override.is_some() && stories.len() > 1 {
+        return Err(AppError::command(
+            "--output is only supported when building a single story package".into(),
+        ));
+    }
+    let assets_path = request
+        .assets_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| assets::path(root));
+    let revision = request
+        .output_override
+        .is_none()
+        .then(|| next_package_revision(&config.output_dir(root), &compendium.id))
+        .transpose()?;
+    let generated_output_root = revision.as_ref().map(|revision| {
+        config
+            .output_dir(root)
+            .join("packages")
+            .join(&compendium.id)
+            .join(revision)
+    });
+    let mut validation = ValidationReport::default();
+    let mut outputs = Vec::new();
+    for target in stories {
+        let story_path = target.directory.join("story.md");
+        let flow_path = target.directory.join("story.flow.yaml");
+        let composition_path = target.directory.join("hardcover.composition.yaml");
+        let composition_plan = composition::load_plan(&composition_path)?;
+        let design_system = request
+            .design_system_override
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| {
+                root.join("design-systems")
+                    .join(&composition_plan.edition.design_system)
+            });
+        let output = request
+            .output_override
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| {
+                generated_output_root
+                    .as_ref()
+                    .expect("generated package output has a revision")
+                    .join(
+                        target
+                            .directory
+                            .file_name()
+                            .expect("story directory always has a name"),
+                    )
+            });
+        validation.issues.extend(
+            build_package(
+                root,
+                &story_path,
+                &flow_path,
+                &composition_path,
+                &design_system,
+                &assets_path,
+                &output,
+                request.policy,
+                request.strict_art,
+            )?
+            .issues,
+        );
+        outputs.push(relative_path(root, &output));
+    }
+    print_report(
+        request.format,
+        "build",
+        PackageBuildOutput { revision, outputs },
+        validation.clone(),
+    )?;
+    if validation.can_proceed() || !request.strict_art {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn next_package_revision(output_directory: &Path, compendium_id: &str) -> Result<String, AppError> {
+    let revisions = output_directory.join("packages").join(compendium_id);
+    let mut greatest = 0_u64;
+    if revisions.is_dir() {
+        for entry in fs::read_dir(&revisions)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(value) = name.to_str().and_then(|name| name.strip_prefix('r')) else {
+                continue;
+            };
+            if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+                greatest = greatest.max(value.parse::<u64>().map_err(|error| {
+                    AppError::command(format!(
+                        "invalid package revision `{}`: {error}",
+                        name.to_string_lossy()
+                    ))
+                })?);
+            }
+        }
+    }
+    Ok(format!("r{:02}", greatest + 1))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_package(
+    project_root: &Path,
+    story_path: &Path,
+    flow_path: &Path,
+    composition_path: &Path,
+    design_system: &Path,
+    assets_path: &Path,
+    output: &Path,
+    policy: &str,
+    strict_art: bool,
+) -> Result<ValidationReport, AppError> {
     let story = flow::load_story(story_path)?;
     let flow_plan = flow::load_plan(flow_path)?;
     let composition_plan = composition::load_plan(composition_path)?;
     let catalog = composition::load_catalog(design_system)?;
-    let project_root = assets_path
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| AppError::command("asset registry must be inside art/".into()))?;
     let mut report = composition::validate(&flow_plan, &composition_plan, &catalog);
     report
         .issues
@@ -877,17 +1057,7 @@ fn build_package(
             strict: strict_art,
         },
     )?;
-    print_report(
-        format,
-        "build",
-        serde_json::json!({"output": output}),
-        validation.clone(),
-    )?;
-    if validation.can_proceed() || !strict_art {
-        Ok(())
-    } else {
-        Err(AppError::Validation)
-    }
+    Ok(validation)
 }
 
 fn inspect_art(
