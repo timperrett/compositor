@@ -805,3 +805,18 @@ fn cli_inspects_and_validates_a_story_flow_plan() {
         .unwrap()
         .contains("validate-flow"));
 }
+
+#[test]
+fn flat_story_sources_are_rejected_after_the_layout_cutover() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/02-flat.md"),
+        "---\nid: flat\ntitle: Flat\n---\nThis source is in the old layout.\n",
+    )
+    .unwrap();
+    let config = Config::load(directory.path()).unwrap();
+    let error = compositor::discovery::discover(directory.path(), &config).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("flat story sources are unsupported"));
+}
