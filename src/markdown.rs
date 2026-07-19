@@ -425,6 +425,10 @@ pub fn content_hash(input: &str) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
+pub(crate) fn paragraph_fingerprint(input: &str) -> String {
+    content_hash(&normalize(&paragraph_text(input)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

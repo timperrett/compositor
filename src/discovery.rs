@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::markdown::parse_document_at;
 use crate::model::{Compendium, SourceProject, Story};
+use crate::paragraph_ledger::load_document;
 use crate::AppError;
 use std::collections::BTreeMap;
 use std::fs;
@@ -51,7 +52,7 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
                     path.display()
                 )));
             }
-            let parsed = parse_document_at(&fs::read_to_string(&path)?, &path)?;
+            let parsed = load_document(&path)?;
             let story_id = required_metadata(&parsed.metadata, "id", &path)?;
             let story_title = required_metadata(&parsed.metadata, "title", &path)?;
             stories.push(Story {

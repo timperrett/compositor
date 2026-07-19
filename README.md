@@ -19,7 +19,7 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 ## Commands
 
 `init`, `parse`, `validate`, `status`, `build`, `diff source`, `plan`, `proof`,
-`inspect <story.md>`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
+`inspect <story.md>`, `source sync`, `source resolve`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
 the conservative mode only. Use `--format json` for stable machine-readable
 reports.
 
@@ -27,6 +27,14 @@ reports.
 revision needed by a Story Flow Plan. `validate-flow <story.md> <story.flow.yaml>
 --design-system <directory>` validates source coverage, declared narrative
 roles, energy, and pacing without changing the manuscript.
+
+For a Flow-Plan-ready story, keep `story.md` as clean prose. Run
+`source sync story.md --write` to create or update the committed sibling
+`story.paragraphs.yaml` ledger and generated `story.annotated.md` review view.
+The ledger owns paragraph IDs; the annotated view is derived and must not be
+edited. If a substantive paragraph edit cannot be matched unambiguously, make
+an explicit editorial decision and use `source resolve` to rebind the approved
+existing ID before syncing again.
 
 Generated state lives in `.compositor/`; HTML proofs are written to
 `output/proofs/`; layout-ready plain-text exports are written to `output/text/`

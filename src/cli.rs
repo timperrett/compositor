@@ -98,6 +98,10 @@ enum Command {
     Inspect {
         story: PathBuf,
     },
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
     ValidateFlow {
         story: PathBuf,
         flow: PathBuf,
@@ -137,6 +141,22 @@ enum DiffTarget {
         story: String,
         before: String,
         after: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SourceCommand {
+    Sync {
+        story: PathBuf,
+        #[arg(long)]
+        write: bool,
+    },
+    Resolve {
+        story: PathBuf,
+        old_id: String,
+        candidate_fingerprint: String,
+        #[arg(long)]
+        write: bool,
     },
 }
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -206,6 +226,7 @@ pub fn run() -> Result<(), AppError> {
     match cli.command {
         Command::Init { force } => build_commands::init(&root, force, cli.format),
         Command::Inspect { story } => inspect_source(&story, cli.format),
+        Command::Source { command } => source_command(command, cli.format),
         Command::ValidateFlow {
             story,
             flow: flow_path,
@@ -232,9 +253,25 @@ pub fn run() -> Result<(), AppError> {
     }
 }
 
+fn source_command(command: SourceCommand, format: OutputFormat) -> Result<(), AppError> {
+    let ledger = match command {
+        SourceCommand::Sync { story, write } => crate::paragraph_ledger::sync(&story, write)?,
+        SourceCommand::Resolve {
+            story,
+            old_id,
+            candidate_fingerprint,
+            write,
+        } => crate::paragraph_ledger::resolve(&story, &old_id, &candidate_fingerprint, write)?,
+    };
+    print_report(format, "source", ledger, ValidationReport::default())
+}
+
 fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Result<(), AppError> {
     let config = Config::load(root)?;
     match command {
+        Command::Source { .. } => Err(AppError::command(
+            "source commands are handled before project configuration is loaded".into(),
+        )),
         Command::Parse { story } => {
             let project = filtered_project(discover(root, &config)?, story.as_deref())?;
             let validation = validation::validate(&project);

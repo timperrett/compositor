@@ -97,6 +97,9 @@ struct RolesFile {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RoleDefinition {
+    #[allow(dead_code)]
+    #[serde(default)]
+    energy: Option<serde_yaml::Value>,
     #[serde(default)]
     text_density: DensityRule,
     #[serde(default)]

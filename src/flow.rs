@@ -106,6 +106,20 @@ struct RolesFile {
 #[serde(deny_unknown_fields)]
 struct RoleRule {
     energy: EnergyRange,
+    #[allow(dead_code)]
+    #[serde(default)]
+    text_density: TextDensityRule,
+    #[allow(dead_code)]
+    #[serde(default)]
+    compatible_layout_families: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TextDensityRule {
+    #[allow(dead_code)]
+    #[serde(default)]
+    allowed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -155,7 +169,7 @@ pub fn load_plan(path: &Path) -> Result<StoryFlowPlan, AppError> {
 }
 
 pub fn load_story(path: &Path) -> Result<Story, AppError> {
-    let parsed = crate::markdown::parse_document(&fs::read_to_string(path)?)?;
+    let parsed = crate::paragraph_ledger::load_document(path)?;
     let id = metadata_string(&parsed.metadata, "id", path)?;
     let title = metadata_string(&parsed.metadata, "title", path)?;
     Ok(Story {
@@ -670,18 +684,24 @@ mod tests {
                     "opening-wonder".into(),
                     RoleRule {
                         energy: EnergyRange { min: 1, max: 3 },
+                        text_density: TextDensityRule::default(),
+                        compatible_layout_families: Vec::new(),
                     },
                 ),
                 (
                     "discovery".into(),
                     RoleRule {
                         energy: EnergyRange { min: 2, max: 4 },
+                        text_density: TextDensityRule::default(),
+                        compatible_layout_families: Vec::new(),
                     },
                 ),
                 (
                     "reveal".into(),
                     RoleRule {
                         energy: EnergyRange { min: 4, max: 5 },
+                        text_density: TextDensityRule::default(),
+                        compatible_layout_families: Vec::new(),
                     },
                 ),
             ]),

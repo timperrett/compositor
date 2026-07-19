@@ -16,6 +16,7 @@ pub(crate) mod markdown;
 pub mod model;
 pub mod overrides;
 pub mod package;
+pub mod paragraph_ledger;
 pub(crate) mod planning;
 pub(crate) mod proof;
 pub(crate) mod report;
