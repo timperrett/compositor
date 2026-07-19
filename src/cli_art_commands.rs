@@ -25,6 +25,7 @@ pub(super) fn art_command(
     command: ArtCommand,
 ) -> Result<(), AppError> {
     match command {
+        ArtCommand::MigrateBriefs { write } => migrate_briefs(root, format, write),
         ArtCommand::Registry { write } => migrate_registry(root, format, write),
         ArtCommand::Register { art_id } => register_asset(root, config, format, &art_id),
         ArtCommand::Select {
@@ -230,6 +231,61 @@ pub(super) fn art_command(
             print_report(format, "art attach", relative, ValidationReport::default())
         }
     }
+}
+
+fn migrate_briefs(
+    root: &std::path::Path,
+    format: OutputFormat,
+    write: bool,
+) -> Result<(), AppError> {
+    let mut migrated = Vec::new();
+    for id in art_brief::ids(root)? {
+        let path = art_brief::path(root, &id);
+        let text = fs::read_to_string(&path)?;
+        let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
+            .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
+        let mapping = value
+            .as_mapping_mut()
+            .ok_or_else(|| AppError::command(format!("brief `{id}` is not a YAML mapping")))?;
+        let story_id = mapping
+            .get(serde_yaml::Value::String("source".into()))
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|source| source.get(serde_yaml::Value::String("story_id".into())))
+            .and_then(serde_yaml::Value::as_str)
+            .ok_or_else(|| AppError::command(format!("brief `{id}` has no source.story_id")))?
+            .to_owned();
+        mapping.insert(
+            serde_yaml::Value::String("schema_version".into()),
+            serde_yaml::Value::Number(2.into()),
+        );
+        let mut source = serde_yaml::Mapping::new();
+        source.insert(
+            serde_yaml::Value::String("story_id".into()),
+            serde_yaml::Value::String(story_id),
+        );
+        source.insert(
+            serde_yaml::Value::String("anchor_id".into()),
+            serde_yaml::Value::String(id.clone()),
+        );
+        mapping.insert(
+            serde_yaml::Value::String("source".into()),
+            serde_yaml::Value::Mapping(source),
+        );
+        if write {
+            storage::write_text_atomic(
+                &path,
+                &serde_yaml::to_string(&value)
+                    .map_err(|error| AppError::serialization(error.to_string()))?,
+            )?;
+        }
+        migrated.push(relative_path(root, &path));
+    }
+    print_report(
+        format,
+        "art migrate-briefs",
+        migrated,
+        ValidationReport::default(),
+    )
 }
 
 pub(super) fn required_art_requirement(

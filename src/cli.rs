@@ -150,6 +150,10 @@ enum ArtCommand {
         #[arg(long)]
         write: bool,
     },
+    MigrateBriefs {
+        #[arg(long)]
+        write: bool,
+    },
     Register {
         art_id: String,
     },
