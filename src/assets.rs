@@ -59,11 +59,14 @@ pub fn path(root: &Path) -> PathBuf {
 }
 
 pub fn load(root: &Path) -> Result<Option<AssetRegistry>, AppError> {
-    let path = path(root);
+    load_from(&path(root))
+}
+
+pub fn load_from(path: &Path) -> Result<Option<AssetRegistry>, AppError> {
     if !path.is_file() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&path)?;
+    let text = fs::read_to_string(path)?;
     serde_yaml::from_str(&text)
         .map(Some)
         .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))

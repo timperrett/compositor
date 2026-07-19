@@ -8,6 +8,7 @@ use crate::proof;
 use crate::report::{self, OutputFormat};
 use crate::storage;
 use crate::validation;
+use crate::{assets, composition, overrides, package};
 use crate::{project_root, AppError};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -54,6 +55,19 @@ enum Command {
     },
     Status,
     Build {
+        story_path: Option<PathBuf>,
+        flow: Option<PathBuf>,
+        composition: Option<PathBuf>,
+        #[arg(long)]
+        design_system: Option<PathBuf>,
+        #[arg(long)]
+        assets: Option<PathBuf>,
+        #[arg(long, default_value = "draft")]
+        asset_policy: String,
+        #[arg(long)]
+        strict_art: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
         #[arg(long, default_value = "conservative")]
         mode: String,
         #[arg(long)]
@@ -89,6 +103,26 @@ enum Command {
         flow: PathBuf,
         #[arg(long)]
         design_system: PathBuf,
+    },
+    ValidateComposition {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    Diagnose {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    Reconcile {
+        composition: PathBuf,
+        overrides: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
     Resolve {
         old_id: String,
@@ -173,6 +207,23 @@ pub fn run() -> Result<(), AppError> {
             flow: flow_path,
             design_system,
         } => validate_flow(&story, &flow_path, &design_system, cli.format),
+        Command::ValidateComposition {
+            story,
+            flow,
+            composition: plan,
+            design_system,
+        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        Command::Diagnose {
+            story,
+            flow,
+            composition: plan,
+            design_system,
+        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        Command::Reconcile {
+            composition: plan,
+            overrides: overrides_path,
+            output,
+        } => reconcile_composition(&plan, &overrides_path, &output, cli.format),
         command => execute(&root, cli.format, command),
     }
 }
@@ -249,7 +300,31 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                 ValidationReport::default(),
             )
         }
-        Command::Build { mode, story } => {
+        Command::Build {
+            story_path,
+            flow,
+            composition: composition_path,
+            design_system,
+            assets: assets_path,
+            asset_policy,
+            strict_art,
+            output,
+            mode,
+            story,
+        } => {
+            if let Some(story_path) = story_path {
+                return build_package(
+                    &story_path,
+                    flow.as_deref(),
+                    composition_path.as_deref(),
+                    design_system.as_deref(),
+                    assets_path.as_deref(),
+                    output.as_deref(),
+                    &asset_policy,
+                    strict_art,
+                    format,
+                );
+            }
             let mode = parse_mode(&mode)?;
             let (prepared, manifest, plans) =
                 build::build_with_mode(root, &config, story.as_deref(), mode)?;
@@ -304,7 +379,11 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             };
             print_report(format, "approve", file, ValidationReport::default())
         }
-        Command::Inspect { .. } | Command::ValidateFlow { .. } => unreachable!(),
+        Command::Inspect { .. }
+        | Command::ValidateFlow { .. }
+        | Command::ValidateComposition { .. }
+        | Command::Diagnose { .. }
+        | Command::Reconcile { .. } => unreachable!(),
         Command::Resolve { old_id, new_id } => {
             let mut resolutions = storage::load_resolutions(root, &config)?;
             resolutions.mappings.insert(old_id.clone(), new_id.clone());
@@ -640,6 +719,117 @@ fn validate_flow(
     let report = flow::validate(&story, &plan, &design);
     print_report(format, "validate-flow", &plan, report.clone())?;
     if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn validate_composition(
+    story_path: &std::path::Path,
+    flow_path: &std::path::Path,
+    composition_path: &std::path::Path,
+    design_system: &std::path::Path,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let _story = flow::load_story(story_path)?;
+    let flow_plan = flow::load_plan(flow_path)?;
+    let plan = composition::load_plan(composition_path)?;
+    let catalog = composition::load_catalog(design_system)?;
+    let report = composition::validate(&flow_plan, &plan, &catalog);
+    print_report(format, "validate-composition", &plan, report.clone())?;
+    if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+fn reconcile_composition(
+    composition_path: &std::path::Path,
+    overrides_path: &std::path::Path,
+    output: &std::path::Path,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let plan = composition::load_plan(composition_path)?;
+    let values = overrides::load(overrides_path)?;
+    let (resolved, report) = overrides::reconcile(&plan, &values);
+    if report.can_proceed() {
+        overrides::write(output, &resolved)?;
+    }
+    print_report(format, "reconcile", resolved, report.clone())?;
+    if report.can_proceed() {
+        Ok(())
+    } else {
+        Err(AppError::Validation)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_package(
+    story_path: &std::path::Path,
+    flow_path: Option<&std::path::Path>,
+    composition_path: Option<&std::path::Path>,
+    design_system: Option<&std::path::Path>,
+    assets_path: Option<&std::path::Path>,
+    output: Option<&std::path::Path>,
+    policy: &str,
+    strict_art: bool,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let flow_path =
+        flow_path.ok_or_else(|| AppError::command("build package requires a flow plan".into()))?;
+    let composition_path = composition_path
+        .ok_or_else(|| AppError::command("build package requires a composition plan".into()))?;
+    let design_system = design_system
+        .ok_or_else(|| AppError::command("build package requires --design-system".into()))?;
+    let assets_path =
+        assets_path.ok_or_else(|| AppError::command("build package requires --assets".into()))?;
+    let output =
+        output.ok_or_else(|| AppError::command("build package requires --output".into()))?;
+    let story = flow::load_story(story_path)?;
+    let flow_plan = flow::load_plan(flow_path)?;
+    let composition_plan = composition::load_plan(composition_path)?;
+    let catalog = composition::load_catalog(design_system)?;
+    let report = composition::validate(&flow_plan, &composition_plan, &catalog);
+    if !report.can_proceed() {
+        return Err(AppError::Validation);
+    }
+    let registry = assets::load_from(assets_path)?
+        .ok_or_else(|| AppError::command("asset registry does not exist".into()))?;
+    let minimum = match policy {
+        "draft" => assets::AssetStatus::Draft,
+        "review" => assets::AssetStatus::Review,
+        "approved" => assets::AssetStatus::Approved,
+        _ => {
+            return Err(AppError::command(
+                "asset policy must be draft, review, or approved".into(),
+            ))
+        }
+    };
+    let project_root = assets_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| AppError::command("asset registry must be inside art/".into()))?;
+    let validation = package::build(
+        project_root,
+        &story,
+        &flow_plan,
+        &composition_plan,
+        &registry,
+        output,
+        package::PackagePolicy {
+            minimum,
+            strict: strict_art,
+        },
+    )?;
+    print_report(
+        format,
+        "build",
+        serde_json::json!({"output": output}),
+        validation.clone(),
+    )?;
+    if validation.can_proceed() || !strict_art {
         Ok(())
     } else {
         Err(AppError::Validation)
