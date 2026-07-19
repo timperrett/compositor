@@ -7,6 +7,7 @@ pub mod cli;
 pub mod config;
 pub(crate) mod diff;
 pub(crate) mod discovery;
+pub mod flow;
 pub(crate) mod identity;
 pub(crate) mod manifest;
 pub(crate) mod markdown;
