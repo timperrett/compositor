@@ -1,9 +1,8 @@
-schema_version: 1
+schema_version: 2
 art_id: golden-book-reveal
 source:
   story_id: golden-book-of-kindness
-  unit_ids: [golden-book-reveal]
-  requirement_revision: 2
+  anchor_id: golden-book-reveal
 generation:
   page_treatment: floating
   prompt: Edgar opens the golden book in a calm moonlit library.

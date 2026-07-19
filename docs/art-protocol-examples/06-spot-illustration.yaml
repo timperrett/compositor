@@ -1,9 +1,8 @@
-schema_version: 1
+schema_version: 2
 art_id: edgar-and-harbour-bell
 source:
   story_id: world-of-lantern-tides
-  unit_ids: [lantern-tides-lantern-rescue]
-  requirement_revision: 1
+  anchor_id: lantern-tides-lantern-rescue
 generation:
   page_treatment: spot
   prompt: >

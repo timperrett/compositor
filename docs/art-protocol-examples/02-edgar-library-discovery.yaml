@@ -1,9 +1,8 @@
-schema_version: 1
+schema_version: 2
 art_id: dragon-map-library-discovery
 source:
   story_id: dragon-map-that-wasnt-there
-  unit_ids: [dragon-map-library-discovery]
-  requirement_revision: 1
+  anchor_id: dragon-map-library-discovery
 context:
   art_note: Story opener in the rain-dim Royal Library with Edgar, Lady Aster, and the dragon-carved box.
   canon_references:

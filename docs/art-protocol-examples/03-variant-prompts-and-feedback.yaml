@@ -1,9 +1,8 @@
-schema_version: 1
+schema_version: 2
 art_id: dragon-map-library-discovery
 source:
   story_id: dragon-map-that-wasnt-there
-  unit_ids: [dragon-map-library-discovery]
-  requirement_revision: 1
+  anchor_id: dragon-map-library-discovery
 generation:
   page_treatment: floating
   prompt: Edgar watches Lady Aster lower a dragon-carved box in the Royal Library.
