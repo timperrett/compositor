@@ -327,7 +327,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
     )
     .unwrap();
     let validate = Command::new(binary)
@@ -500,7 +500,7 @@ fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
         fs::write(
             directory.path().join("art/briefs/reveal.yaml"),
             format!(
-                "schema_version: 1\nart_id: reveal\nsource:\n  story_id: story\n  unit_ids: [reveal]\n  requirement_revision: 1\ngeneration:\n{treatment}  prompt: A moonlit library.\n"
+                "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n{treatment}  prompt: A moonlit library.\n"
             ),
         )
         .unwrap();
@@ -516,6 +516,55 @@ fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
             .unwrap();
         assert!(!validate.status.success());
     }
+}
+
+#[test]
+fn asset_registry_selection_review_and_approval_are_explicit() {
+    let directory = project();
+    fs::write(
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
+        "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\nEdgar opens the book.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+    fs::create_dir_all(directory.path().join("assets/drafts/reveal/r01")).unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("assets/drafts/reveal/r01/candidate-a.png"),
+        b"candidate",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/reveal.yaml"),
+        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    for arguments in [
+        vec!["art", "registry", "--write"],
+        vec!["art", "select", "reveal", "a"],
+        vec!["art", "review", "reveal"],
+        vec!["art", "approve-asset", "reveal"],
+    ] {
+        let result = Command::new(binary)
+            .args(["--root", directory.path().to_str().unwrap()])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(
+        fs::read(directory.path().join("assets/approved/reveal.png")).unwrap(),
+        b"candidate"
+    );
+    assert!(fs::read_to_string(directory.path().join("art/assets.yaml"))
+        .unwrap()
+        .contains("status: approved"));
 }
 
 #[test]

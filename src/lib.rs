@@ -2,6 +2,7 @@ pub const BUILD_VERSION: &str = env!("COMPOSITOR_BUILD_VERSION");
 
 pub(crate) mod art;
 pub(crate) mod art_brief;
+pub mod assets;
 pub mod build;
 pub mod cli;
 pub mod composition;

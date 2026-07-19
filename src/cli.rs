@@ -112,6 +112,32 @@ enum ApprovalKind {
 
 #[derive(Debug, Subcommand)]
 enum ArtCommand {
+    Registry {
+        #[arg(long)]
+        write: bool,
+    },
+    Register {
+        art_id: String,
+    },
+    Select {
+        art_id: String,
+        candidate_id: String,
+        #[arg(long)]
+        feedback: Option<String>,
+    },
+    Review {
+        art_id: String,
+    },
+    ApproveAsset {
+        art_id: String,
+    },
+    Reject {
+        art_id: String,
+    },
+    Supersede {
+        art_id: String,
+        successor: String,
+    },
     List {
         #[arg(long)]
         story: Option<String>,

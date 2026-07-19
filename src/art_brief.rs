@@ -1,12 +1,13 @@
 use crate::config::Config;
-use crate::model::{IllustrationRequirement, Severity, ValidationIssue, ValidationReport};
-use crate::{storage, AppError};
+use crate::discovery::discover;
+use crate::model::{Severity, ValidationIssue, ValidationReport};
+use crate::AppError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub const ART_BRIEF_VERSION: u32 = 1;
+pub const ART_BRIEF_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -27,8 +28,7 @@ pub struct ArtBrief {
 #[serde(deny_unknown_fields)]
 pub struct ArtBriefSource {
     pub story_id: String,
-    pub unit_ids: Vec<String>,
-    pub requirement_revision: u64,
+    pub anchor_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,7 +85,6 @@ pub struct ArtSelection {
 pub struct ArtBriefInspection {
     pub path: String,
     pub brief: Option<ArtBrief>,
-    pub requirement: Option<IllustrationRequirement>,
     pub validation: ValidationReport,
 }
 
@@ -129,22 +128,23 @@ pub fn load(root: &Path, art_id: &str) -> Result<Option<ArtBrief>, AppError> {
         .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
 }
 
+pub fn save(root: &Path, brief: &ArtBrief) -> Result<(), AppError> {
+    let text =
+        serde_yaml::to_string(brief).map_err(|error| AppError::serialization(error.to_string()))?;
+    crate::storage::write_text_atomic(&path(root, &brief.art_id), &text)
+}
+
 pub fn inspect(root: &Path, config: &Config, art_id: &str) -> ArtBriefInspection {
     let path = path(root, art_id);
-    let requirement = storage::load_latest_requirement(root, config, art_id)
-        .ok()
-        .flatten();
     match load(root, art_id) {
         Ok(Some(brief)) => ArtBriefInspection {
             path: relative(root, &path),
-            validation: validate(root, &brief, requirement.as_ref()),
+            validation: validate(root, config, &brief),
             brief: Some(brief),
-            requirement,
         },
         Ok(None) => ArtBriefInspection {
             path: relative(root, &path),
             brief: None,
-            requirement,
             validation: report_issue(
                 Severity::Warning,
                 "missing_art_brief",
@@ -157,7 +157,6 @@ pub fn inspect(root: &Path, config: &Config, art_id: &str) -> ArtBriefInspection
         Err(error) => ArtBriefInspection {
             path: relative(root, &path),
             brief: None,
-            requirement,
             validation: report_issue(
                 Severity::Error,
                 "invalid_art_brief",
@@ -170,11 +169,7 @@ pub fn inspect(root: &Path, config: &Config, art_id: &str) -> ArtBriefInspection
     }
 }
 
-pub fn validate(
-    root: &Path,
-    brief: &ArtBrief,
-    requirement: Option<&IllustrationRequirement>,
-) -> ValidationReport {
+pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationReport {
     let mut report = ValidationReport::default();
     let brief_path = relative(root, &path(root, &brief.art_id));
     let context = BriefValidationContext {
@@ -216,53 +211,53 @@ pub fn validate(
             Some(&brief.art_id),
         );
     }
-    if brief.source.unit_ids.is_empty() {
+    if brief.source.anchor_id.is_empty() || !crate::markdown::valid_anchor(&brief.source.anchor_id)
+    {
         push(
             &mut report,
             Severity::Error,
-            "missing_source_units",
-            "source.unit_ids must not be empty".into(),
+            "invalid_art_anchor",
+            "source.anchor_id must be lowercase kebab-case".into(),
             &brief_path,
             Some(&brief.source.story_id),
             Some(&brief.art_id),
         );
     }
-    match requirement {
-        Some(requirement) => {
-            if requirement.art_id != brief.art_id
-                || requirement.story_id != brief.source.story_id
-                || requirement.unit_ids != brief.source.unit_ids
-            {
-                push(
-                    &mut report,
-                    Severity::Error,
-                    "art_brief_source_mismatch",
-                    "brief source does not match the current illustration requirement".into(),
-                    &brief_path,
-                    Some(&brief.source.story_id),
-                    Some(&brief.art_id),
-                );
-            }
-            if requirement.revision != brief.source.requirement_revision {
-                push(
-                    &mut report,
-                    Severity::Warning,
-                    "stale_art_brief_requirement",
-                    format!(
-                        "brief targets requirement v{:03}, current requirement is v{:03}",
-                        brief.source.requirement_revision, requirement.revision
-                    ),
-                    &brief_path,
-                    Some(&brief.source.story_id),
-                    Some(&brief.art_id),
-                );
-            }
-        }
-        None => push(
+    match discover(root, config) {
+        Ok(project) => match project
+            .compendiums
+            .iter()
+            .flat_map(|compendium| &compendium.stories)
+            .find(|story| story.id == brief.source.story_id)
+        {
+            Some(story)
+                if story.units.iter().any(|unit| {
+                    unit.directives.anchor.as_deref() == Some(&brief.source.anchor_id)
+                }) => {}
+            Some(_) => push(
+                &mut report,
+                Severity::Error,
+                "art_brief_anchor_missing",
+                "source.anchor_id does not exist in the named story".into(),
+                &brief_path,
+                Some(&brief.source.story_id),
+                Some(&brief.art_id),
+            ),
+            None => push(
+                &mut report,
+                Severity::Error,
+                "art_brief_story_missing",
+                "source.story_id does not exist".into(),
+                &brief_path,
+                Some(&brief.source.story_id),
+                Some(&brief.art_id),
+            ),
+        },
+        Err(error) => push(
             &mut report,
             Severity::Error,
-            "missing_art_requirement",
-            "no current illustration requirement exists for this art ID".into(),
+            "art_brief_source_unavailable",
+            error.to_string(),
             &brief_path,
             Some(&brief.source.story_id),
             Some(&brief.art_id),
@@ -447,12 +442,11 @@ mod tests {
     use super::{ArtBrief, PageTreatment};
 
     const BRIEF: &str = r#"
-schema_version: 1
+schema_version: 2
 art_id: reveal
 source:
   story_id: story
-  unit_ids: [reveal]
-  requirement_revision: 1
+  anchor_id: reveal
 generation:
   page_treatment: floating
   prompt: A moonlit library.

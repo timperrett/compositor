@@ -1,4 +1,5 @@
 use super::*;
+use crate::assets::{self, AssetRecord, AssetRegistry, AssetStatus};
 
 #[derive(Debug, Serialize)]
 struct ArtListItem {
@@ -24,6 +25,23 @@ pub(super) fn art_command(
     command: ArtCommand,
 ) -> Result<(), AppError> {
     match command {
+        ArtCommand::Registry { write } => migrate_registry(root, format, write),
+        ArtCommand::Register { art_id } => register_asset(root, config, format, &art_id),
+        ArtCommand::Select {
+            art_id,
+            candidate_id,
+            feedback,
+        } => select_candidate(root, config, format, &art_id, &candidate_id, feedback),
+        ArtCommand::Review { art_id } => {
+            transition_asset(root, format, &art_id, AssetStatus::Review)
+        }
+        ArtCommand::ApproveAsset { art_id } => approve_asset(root, config, format, &art_id),
+        ArtCommand::Reject { art_id } => {
+            transition_asset(root, format, &art_id, AssetStatus::Rejected)
+        }
+        ArtCommand::Supersede { art_id, successor } => {
+            supersede_asset(root, format, &art_id, &successor)
+        }
         ArtCommand::List { story } => {
             let project = discover(root, config)?;
             if let Some(story_id) = story.as_deref() {
@@ -122,6 +140,16 @@ pub(super) fn art_command(
                     .iter()
                     .flat_map(|record| record.validation.issues.clone())
                     .collect(),
+            };
+            let validation = match assets::load(root)? {
+                Some(registry) => ValidationReport {
+                    issues: validation
+                        .issues
+                        .into_iter()
+                        .chain(assets::validate(root, &registry).issues)
+                        .collect(),
+                },
+                None => validation,
             };
             print_report(format, "art validate", records, validation.clone())?;
             if validation.is_blocking() {
@@ -262,4 +290,232 @@ pub(super) fn status_output(
         missing_art_briefs,
         artwork_requirements,
     })
+}
+
+fn migrate_registry(
+    root: &std::path::Path,
+    format: OutputFormat,
+    write: bool,
+) -> Result<(), AppError> {
+    let mut registry = assets::load(root)?.unwrap_or(AssetRegistry {
+        schema: assets::ASSET_REGISTRY_SCHEMA.into(),
+        assets: Vec::new(),
+    });
+    registry.schema = assets::ASSET_REGISTRY_SCHEMA.into();
+    for id in art_brief::ids(root)? {
+        if assets::record(&registry, &id).is_some() {
+            continue;
+        }
+        let brief = art_brief::load(root, &id)?
+            .ok_or_else(|| AppError::command(format!("missing brief `{id}`")))?;
+        let (status, file) = match brief.selection.as_ref().and_then(|selection| {
+            brief
+                .candidates
+                .iter()
+                .find(|candidate| candidate.id == selection.candidate_id)
+        }) {
+            Some(candidate) => (AssetStatus::Draft, Some(candidate.file.clone())),
+            None => (AssetStatus::Requested, None),
+        };
+        registry.assets.push(AssetRecord {
+            id: id.clone(),
+            brief: format!("art/briefs/{id}.yaml"),
+            status,
+            file,
+            superseded_by: None,
+        });
+    }
+    registry
+        .assets
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    if write {
+        assets::save(root, &registry)?;
+    }
+    print_report(
+        format,
+        "art registry",
+        registry,
+        ValidationReport::default(),
+    )
+}
+
+fn register_asset(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let inspection = art_brief::inspect(root, config, art_id);
+    if !inspection.validation.can_proceed() {
+        return Err(AppError::Validation);
+    }
+    let mut registry = assets::load(root)?.unwrap_or(AssetRegistry {
+        schema: assets::ASSET_REGISTRY_SCHEMA.into(),
+        assets: Vec::new(),
+    });
+    if assets::record(&registry, art_id).is_some() {
+        return Err(AppError::command(format!(
+            "asset `{art_id}` is already registered"
+        )));
+    }
+    registry.assets.push(AssetRecord {
+        id: art_id.into(),
+        brief: format!("art/briefs/{art_id}.yaml"),
+        status: AssetStatus::Requested,
+        file: None,
+        superseded_by: None,
+    });
+    registry
+        .assets
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    assets::save(root, &registry)?;
+    print_report(
+        format,
+        "art register",
+        registry,
+        ValidationReport::default(),
+    )
+}
+
+fn select_candidate(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+    candidate_id: &str,
+    feedback: Option<String>,
+) -> Result<(), AppError> {
+    let mut brief = art_brief::load(root, art_id)?
+        .ok_or_else(|| AppError::command(format!("no art brief exists for `{art_id}`")))?;
+    let candidate = brief
+        .candidates
+        .iter()
+        .find(|candidate| candidate.id == candidate_id)
+        .ok_or_else(|| AppError::command(format!("unknown candidate `{candidate_id}`")))?;
+    let file = candidate.file.clone();
+    brief.selection = Some(art_brief::ArtSelection {
+        candidate_id: candidate_id.into(),
+        feedback,
+    });
+    if !art_brief::validate(root, config, &brief).can_proceed() {
+        return Err(AppError::Validation);
+    }
+    let mut registry = assets::load(root)?.ok_or_else(|| {
+        AppError::command(
+            "no asset registry exists; run `compositor art registry --write` first".into(),
+        )
+    })?;
+    let asset = assets::record_mut(&mut registry, art_id)
+        .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
+    if asset.status == AssetStatus::Approved {
+        return Err(AppError::command(
+            "approved assets are immutable; create a replacement asset instead".into(),
+        ));
+    }
+    if matches!(asset.status, AssetStatus::Review | AssetStatus::Requested) {
+        assets::transition(asset, AssetStatus::Draft, Some(file))?;
+    } else if asset.status == AssetStatus::Draft {
+        asset.file = Some(file);
+    } else {
+        return Err(AppError::command(
+            "cannot select a candidate for a terminal asset".into(),
+        ));
+    }
+    art_brief::save(root, &brief)?;
+    assets::save(root, &registry)?;
+    print_report(format, "art select", registry, ValidationReport::default())
+}
+
+fn transition_asset(
+    root: &std::path::Path,
+    format: OutputFormat,
+    art_id: &str,
+    next: AssetStatus,
+) -> Result<(), AppError> {
+    let mut registry =
+        assets::load(root)?.ok_or_else(|| AppError::command("no asset registry exists".into()))?;
+    let asset = assets::record_mut(&mut registry, art_id)
+        .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
+    assets::transition(asset, next, None)?;
+    assets::save(root, &registry)?;
+    print_report(
+        format,
+        "art lifecycle",
+        registry,
+        ValidationReport::default(),
+    )
+}
+
+fn approve_asset(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let mut registry =
+        assets::load(root)?.ok_or_else(|| AppError::command("no asset registry exists".into()))?;
+    let asset = assets::record_mut(&mut registry, art_id)
+        .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
+    if asset.status != AssetStatus::Review {
+        return Err(AppError::command(
+            "only review assets can be approved".into(),
+        ));
+    }
+    let source = asset
+        .file
+        .as_ref()
+        .ok_or_else(|| AppError::command("review asset has no file".into()))?;
+    let source = root.join(source);
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png");
+    let target = root
+        .join(&config.assets.approved_directory)
+        .join(format!("{art_id}.{extension}"));
+    if target.exists() {
+        return Err(AppError::command(format!(
+            "approved asset already exists: {}",
+            target.display()
+        )));
+    }
+    fs::create_dir_all(
+        target
+            .parent()
+            .ok_or_else(|| AppError::command("approved path has no parent".into()))?,
+    )?;
+    fs::copy(&source, &target)?;
+    assets::transition(
+        asset,
+        AssetStatus::Approved,
+        Some(relative_path(root, &target)),
+    )?;
+    assets::save(root, &registry)?;
+    print_report(format, "art approve", registry, ValidationReport::default())
+}
+
+fn supersede_asset(
+    root: &std::path::Path,
+    format: OutputFormat,
+    art_id: &str,
+    successor: &str,
+) -> Result<(), AppError> {
+    let mut registry =
+        assets::load(root)?.ok_or_else(|| AppError::command("no asset registry exists".into()))?;
+    if assets::record(&registry, successor).is_none() {
+        return Err(AppError::command(format!(
+            "successor asset `{successor}` is not registered"
+        )));
+    }
+    let asset = assets::record_mut(&mut registry, art_id)
+        .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
+    assets::transition(asset, AssetStatus::Superseded, None)?;
+    asset.superseded_by = Some(successor.into());
+    assets::save(root, &registry)?;
+    print_report(
+        format,
+        "art supersede",
+        registry,
+        ValidationReport::default(),
+    )
 }
