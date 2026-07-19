@@ -1,3 +1,4 @@
+use crate::art_brief::{self, ArtUsage};
 use crate::assets::{self, AssetRegistry, AssetStatus};
 use crate::composition::{ArtReference, CompositionPlan};
 use crate::flow::{SourceRef, StoryFlowPlan};
@@ -41,6 +42,14 @@ struct ArtManifest {
     resolved: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct OpenerManifest<'a> {
+    schema: &'static str,
+    title: &'a str,
+    placement: &'a crate::composition::OpenerPlacement,
+    art: ArtManifest,
+}
+
 pub fn build(
     root: &Path,
     story: &Story,
@@ -60,7 +69,35 @@ pub fn build(
         .prefix(".compositor-package-")
         .tempdir_in(output_parent)?;
     let package_root = temporary.path();
-    let mut guide = String::from("<!doctype html><html><body><h1>Assembly guide</h1>");
+    let opener_directory = package_root.join("opener");
+    fs::create_dir_all(opener_directory.join("art"))?;
+    fs::write(
+        opener_directory.join("title.txt"),
+        format!("{}\n", composition.opener.title),
+    )?;
+    let opener_art = resolve_asset(
+        root,
+        registry,
+        &composition.opener.art,
+        ArtUsage::Opener,
+        &opener_directory,
+        policy,
+        &mut report,
+    )?;
+    fs::write(
+        opener_directory.join("opener.yaml"),
+        serde_yaml::to_string(&OpenerManifest {
+            schema: "compositor.dev/story-opener/v1",
+            title: &composition.opener.title,
+            placement: &composition.opener.placement,
+            art: opener_art,
+        })
+        .map_err(|error| AppError::serialization(error.to_string()))?,
+    )?;
+    let mut guide = format!(
+        "<!doctype html><html><body><h1>Assembly guide</h1><section><h2>Story opener — {}</h2><p>center-page</p><p>opener</p></section>",
+        composition.opener.title
+    );
     let mut entries = Vec::new();
     for (index, flow_spread) in flow.spreads.iter().enumerate() {
         let composition_spread = composition
@@ -103,6 +140,7 @@ pub fn build(
                     root,
                     registry,
                     asset,
+                    ArtUsage::Story,
                     &spread_directory,
                     policy,
                     &mut report,
@@ -145,7 +183,7 @@ pub fn build(
         serde_yaml::to_string(&report)
             .map_err(|error| AppError::serialization(error.to_string()))?,
     )?;
-    let root_manifest = serde_json::json!({"schema":"compositor.dev/production-package/v1","story":{"id":story.id,"title":story.title,"source_revision":story.source_hash},"edition":composition.edition,"build":{"asset_policy":format!("{:?}",policy.minimum).to_lowercase(),"strict_art":policy.strict},"spreads":{"count":entries.len(),"entries":entries}});
+    let root_manifest = serde_json::json!({"schema":"compositor.dev/production-package/v1","story":{"id":story.id,"title":story.title,"source_revision":story.source_hash},"edition":composition.edition,"opener":{"directory":"opener","title":composition.opener.title,"placement":composition.opener.placement},"build":{"asset_policy":format!("{:?}",policy.minimum).to_lowercase(),"strict_art":policy.strict},"spreads":{"count":entries.len(),"entries":entries}});
     fs::write(
         package_root.join("manifest.yaml"),
         serde_yaml::to_string(&root_manifest)
@@ -205,6 +243,7 @@ fn resolve_asset(
     root: &Path,
     registry: &AssetRegistry,
     asset: &ArtReference,
+    expected_usage: ArtUsage,
     spread: &Path,
     policy: PackagePolicy,
     report: &mut ValidationReport,
@@ -217,6 +256,22 @@ fn resolve_asset(
             report,
         ));
     };
+    let Some(brief) = art_brief::load(root, &asset.id)? else {
+        return Ok(unresolved(
+            asset,
+            "ART_BRIEF_MISSING",
+            "asset has no art brief",
+            report,
+        ));
+    };
+    if brief.usage != expected_usage {
+        return Ok(unresolved(
+            asset,
+            "ART_USAGE_MISMATCH",
+            "art usage does not match this package location",
+            report,
+        ));
+    }
     if !assets::allowed(record.status, policy.minimum) {
         return Ok(unresolved(
             asset,
@@ -304,7 +359,7 @@ mod tests {
         ))
         .unwrap();
         let composition: CompositionPlan = serde_yaml::from_str(
-            "schema: compositor.dev/composition-plan/v1\nstory:\n  id: story\n  flow: story.flow.yaml\nedition:\n  id: first-edition\n  design_system: example\nspreads:\n  - id: spread-001\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n",
+            "schema: compositor.dev/composition-plan/v2\nstory:\n  id: story\n  flow: story.flow.yaml\nedition:\n  id: first-edition\n  design_system: example\nopener:\n  title: Story\n  placement: center-page\n  art: { id: story-opener, role: primary-subject }\nspreads:\n  - id: spread-001\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n",
         )
         .unwrap();
         let output = directory.path().join("delivery/first-edition/package");
@@ -327,6 +382,10 @@ mod tests {
         .unwrap();
 
         assert!(output.join("assembly-guide.html").is_file());
+        assert_eq!(
+            fs::read_to_string(output.join("opener/title.txt")).unwrap(),
+            "Story\n"
+        );
         assert!(output.join("spreads/001-opening/text.md").is_file());
         assert_eq!(
             fs::read_to_string(output.join("spreads/001-opening/text.txt")).unwrap(),

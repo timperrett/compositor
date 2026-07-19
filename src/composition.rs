@@ -1,12 +1,13 @@
+use crate::art_brief::{self, ArtUsage};
 use crate::flow::StoryFlowPlan;
-use crate::model::{Severity, ValidationIssue, ValidationReport};
+use crate::model::{Severity, Story, ValidationIssue, ValidationReport};
 use crate::AppError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-pub const COMPOSITION_PLAN_SCHEMA: &str = "compositor.dev/composition-plan/v1";
+pub const COMPOSITION_PLAN_SCHEMA: &str = "compositor.dev/composition-plan/v2";
 const DESIGN_SYSTEM_SCHEMA: &str = "compositor.dev/design-system/v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub struct CompositionPlan {
     pub schema: String,
     pub story: CompositionStory,
     pub edition: Edition,
+    pub opener: StoryOpener,
     pub spreads: Vec<CompositionSpread>,
 }
 
@@ -30,6 +32,20 @@ pub struct CompositionStory {
 pub struct Edition {
     pub id: String,
     pub design_system: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StoryOpener {
+    pub title: String,
+    pub placement: OpenerPlacement,
+    pub art: ArtReference,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpenerPlacement {
+    CenterPage,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -217,6 +233,24 @@ pub fn validate(
             None,
         );
     }
+    if plan.opener.title.trim().is_empty() {
+        issue(
+            &mut report,
+            "OPENER_TITLE_MISSING",
+            "opener.title must not be empty",
+            path,
+            None,
+        );
+    }
+    if plan.opener.art.id.trim().is_empty() || plan.opener.art.role != "primary-subject" {
+        issue(
+            &mut report,
+            "OPENER_ART_INVALID",
+            "opener art must name one primary-subject asset",
+            path,
+            None,
+        );
+    }
 
     let flow_spreads = flow
         .spreads
@@ -371,6 +405,70 @@ pub fn validate(
     report
 }
 
+pub fn validate_art_usage(
+    root: &Path,
+    plan: &CompositionPlan,
+) -> Result<ValidationReport, AppError> {
+    let mut report = ValidationReport::default();
+    validate_reference_usage(
+        root,
+        &plan.opener.art,
+        ArtUsage::Opener,
+        "OPENER_ART_USAGE_INVALID",
+        "opener art must be declared with usage: opener",
+        &mut report,
+    )?;
+    for spread in &plan.spreads {
+        for asset in &spread.art_assets {
+            validate_reference_usage(
+                root,
+                asset,
+                ArtUsage::Story,
+                "OPENER_ART_ON_STORY_SPREAD",
+                "opener art may only appear in the composition opener",
+                &mut report,
+            )?;
+        }
+    }
+    Ok(report)
+}
+
+pub fn validate_story_title(story: &Story, plan: &CompositionPlan) -> ValidationReport {
+    let mut report = ValidationReport::default();
+    if plan.opener.title != story.title {
+        issue(
+            &mut report,
+            "OPENER_TITLE_MISMATCH",
+            "opener.title must exactly match the story title",
+            &plan.story.flow,
+            None,
+        );
+    }
+    report
+}
+
+fn validate_reference_usage(
+    root: &Path,
+    asset: &ArtReference,
+    expected: ArtUsage,
+    code: &str,
+    message: &str,
+    report: &mut ValidationReport,
+) -> Result<(), AppError> {
+    match art_brief::load(root, &asset.id)? {
+        Some(brief) if brief.usage == expected => {}
+        Some(_) => issue(report, code, message, "art/briefs", Some(&asset.id)),
+        None => issue(
+            report,
+            "COMPOSITION_ART_BRIEF_MISSING",
+            "composition art must have a matching art brief",
+            "art/briefs",
+            Some(&asset.id),
+        ),
+    }
+    Ok(())
+}
+
 fn issue(
     report: &mut ValidationReport,
     code: &str,
@@ -392,6 +490,7 @@ fn issue(
 mod tests {
     use super::*;
     use crate::flow::{FlowSpread, FlowStory, Narrative, SourceRange, SourceRef};
+    use std::fs;
 
     #[test]
     fn rejects_unknown_layouts_and_missing_flow_spreads() {
@@ -436,6 +535,14 @@ mod tests {
                 id: "hardcover".into(),
                 design_system: "edgar-v1".into(),
             },
+            opener: StoryOpener {
+                title: "Story".into(),
+                placement: OpenerPlacement::CenterPage,
+                art: ArtReference {
+                    id: "story-opener".into(),
+                    role: "primary-subject".into(),
+                },
+            },
             spreads: vec![],
         };
         let catalog = DesignCatalog {
@@ -447,5 +554,61 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "COMPOSITION_SPREAD_UNASSIGNED"));
+    }
+
+    #[test]
+    fn rejects_opener_art_on_a_narrative_spread() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/opener.yaml"),
+            "schema_version: 2\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
+        )
+        .unwrap();
+        let plan = CompositionPlan {
+            schema: COMPOSITION_PLAN_SCHEMA.into(),
+            story: CompositionStory {
+                id: "story".into(),
+                flow: "story.flow.yaml".into(),
+            },
+            edition: Edition {
+                id: "hardcover".into(),
+                design_system: "edgar-v1".into(),
+            },
+            opener: StoryOpener {
+                title: "Story".into(),
+                placement: OpenerPlacement::CenterPage,
+                art: ArtReference {
+                    id: "opener".into(),
+                    role: "primary-subject".into(),
+                },
+            },
+            spreads: vec![CompositionSpread {
+                id: "spread-001".into(),
+                layout: LayoutChoice {
+                    family: "environment-led".into(),
+                    variant: "opening-quiet-upper-left".into(),
+                },
+                text: TextIntent {
+                    density: "light".into(),
+                },
+                illustration: IllustrationIntent {
+                    mode: "scene".into(),
+                    focal_subject: "Story opening".into(),
+                    viewpoint: None,
+                    scale: None,
+                    quiet_region: Some("upper-left".into()),
+                },
+                art_assets: vec![ArtReference {
+                    id: "opener".into(),
+                    role: "primary-subject".into(),
+                }],
+            }],
+        };
+        let report = validate_art_usage(directory.path(), &plan).unwrap();
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "OPENER_ART_ON_STORY_SPREAD"));
     }
 }

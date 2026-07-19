@@ -16,6 +16,8 @@ pub struct ArtBrief {
     pub art_id: String,
     pub source: ArtBriefSource,
     #[serde(default)]
+    pub usage: ArtUsage,
+    #[serde(default)]
     pub context: ArtBriefContext,
     pub generation: ArtGeneration,
     #[serde(default)]
@@ -29,6 +31,14 @@ pub struct ArtBrief {
 pub struct ArtBriefSource {
     pub story_id: String,
     pub anchor_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtUsage {
+    #[default]
+    Story,
+    Opener,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -206,6 +216,18 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
             Severity::Error,
             "missing_generation_prompt",
             "generation.prompt must not be empty".into(),
+            &brief_path,
+            Some(&brief.source.story_id),
+            Some(&brief.art_id),
+        );
+    }
+    if brief.usage == ArtUsage::Opener && brief.generation.page_treatment != PageTreatment::Floating
+    {
+        push(
+            &mut report,
+            Severity::Error,
+            "opener_art_treatment_invalid",
+            "opener art must use the floating page treatment".into(),
             &brief_path,
             Some(&brief.source.story_id),
             Some(&brief.art_id),

@@ -237,13 +237,13 @@ pub fn run() -> Result<(), AppError> {
             flow,
             composition: plan,
             design_system,
-        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        } => validate_composition(&root, &story, &flow, &plan, &design_system, cli.format),
         Command::Diagnose {
             story,
             flow,
             composition: plan,
             design_system,
-        } => validate_composition(&story, &flow, &plan, &design_system, cli.format),
+        } => validate_composition(&root, &story, &flow, &plan, &design_system, cli.format),
         Command::Reconcile {
             composition: plan,
             overrides: overrides_path,
@@ -767,17 +767,24 @@ fn validate_flow(
 }
 
 fn validate_composition(
+    root: &std::path::Path,
     story_path: &std::path::Path,
     flow_path: &std::path::Path,
     composition_path: &std::path::Path,
     design_system: &std::path::Path,
     format: OutputFormat,
 ) -> Result<(), AppError> {
-    let _story = flow::load_story(story_path)?;
+    let story = flow::load_story(story_path)?;
     let flow_plan = flow::load_plan(flow_path)?;
     let plan = composition::load_plan(composition_path)?;
     let catalog = composition::load_catalog(design_system)?;
-    let report = composition::validate(&flow_plan, &plan, &catalog);
+    let mut report = composition::validate(&flow_plan, &plan, &catalog);
+    report
+        .issues
+        .extend(composition::validate_art_usage(root, &plan)?.issues);
+    report
+        .issues
+        .extend(composition::validate_story_title(&story, &plan).issues);
     print_report(format, "validate-composition", &plan, report.clone())?;
     if report.can_proceed() {
         Ok(())
@@ -832,7 +839,17 @@ fn build_package(
     let flow_plan = flow::load_plan(flow_path)?;
     let composition_plan = composition::load_plan(composition_path)?;
     let catalog = composition::load_catalog(design_system)?;
-    let report = composition::validate(&flow_plan, &composition_plan, &catalog);
+    let project_root = assets_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| AppError::command("asset registry must be inside art/".into()))?;
+    let mut report = composition::validate(&flow_plan, &composition_plan, &catalog);
+    report
+        .issues
+        .extend(composition::validate_art_usage(project_root, &composition_plan)?.issues);
+    report
+        .issues
+        .extend(composition::validate_story_title(&story, &composition_plan).issues);
     if !report.can_proceed() {
         return Err(AppError::Validation);
     }
@@ -848,10 +865,6 @@ fn build_package(
             ))
         }
     };
-    let project_root = assets_path
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| AppError::command("asset registry must be inside art/".into()))?;
     let validation = package::build(
         project_root,
         &story,

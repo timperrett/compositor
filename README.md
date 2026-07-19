@@ -36,6 +36,12 @@ edited. If a substantive paragraph edit cannot be matched unambiguously, make
 an explicit editorial decision and use `source resolve` to rebind the approved
 existing ID before syncing again.
 
+Composition plans use `compositor.dev/composition-plan/v2`. Each plan has a
+separate `opener` with the exact story title, `placement: center-page`, and a
+single `usage: opener` art record. Narrative `spreads` are distinct and may
+reference only `usage: story` art. Package builds emit the opener under
+`opener/` and never treat it as `spread-001`.
+
 Generated state lives in `.compositor/`; HTML proofs are written to
 `output/proofs/`; layout-ready plain-text exports are written to `output/text/`
 on every successful build. Both story-level and compendium-level `.txt` files
