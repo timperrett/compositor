@@ -1,4 +1,7 @@
-use crate::model::{ArtLayout, ArtOrientation, ArtSurface, Directives, PageLayout, Unit, UnitType};
+use crate::model::{
+    ArtLayout, ArtOrientation, ArtSurface, Directives, PageLayout, ParagraphComment,
+    SourceParagraph, Unit, UnitType,
+};
 use crate::AppError;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
@@ -9,6 +12,9 @@ use std::path::Path;
 pub struct ParsedDocument {
     pub metadata: BTreeMap<String, serde_yaml::Value>,
     pub units: Vec<Unit>,
+    pub paragraphs: Vec<SourceParagraph>,
+    pub paragraph_comments: Vec<ParagraphComment>,
+    pub source_hash: String,
 }
 
 pub fn parse_document(input: &str) -> Result<ParsedDocument, AppError> {
@@ -45,7 +51,14 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, AppError> {
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    Ok(ParsedDocument { metadata, units })
+    let (paragraphs, paragraph_comments) = parse_paragraphs(&body);
+    Ok(ParsedDocument {
+        metadata,
+        units,
+        paragraphs,
+        paragraph_comments,
+        source_hash: content_hash(&input.replace("\r\n", "\n")),
+    })
 }
 
 /// Parses a Markdown source file and prefixes input errors with the authored
@@ -57,6 +70,75 @@ pub fn parse_document_at(input: &str, source: &Path) -> Result<ParsedDocument, A
         }
         error => error,
     })
+}
+
+fn parse_paragraphs(body: &str) -> (Vec<SourceParagraph>, Vec<ParagraphComment>) {
+    let mut starts = Vec::new();
+    let mut paragraphs = Vec::new();
+    for (event, range) in Parser::new_ext(body, Options::all()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Paragraph) => starts.push(range.start),
+            Event::End(TagEnd::Paragraph) => {
+                if let Some(start) = starts.pop() {
+                    let content = body[start..range.end].trim().to_owned();
+                    let visible = paragraph_text(&content);
+                    paragraphs.push(SourceParagraph {
+                        ordinal: paragraphs.len() + 1,
+                        source_start: start,
+                        source_end: range.end,
+                        content,
+                        word_count: visible.split_whitespace().count(),
+                        id: None,
+                        id_comment_start: None,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut comments = top_level_comment_ranges(body)
+        .into_iter()
+        .filter_map(|range| {
+            let comment = body[range.start + 4..range.end - 3].trim();
+            let (kind, raw_id) = comment.split_once(':')?;
+            (kind.trim() == "paragraph").then(|| ParagraphComment {
+                raw_id: raw_id.trim().to_owned(),
+                source_start: range.start,
+                source_end: range.end,
+                paragraph_ordinal: None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for comment in &mut comments {
+        let paragraph = paragraphs
+            .iter_mut()
+            .find(|paragraph| paragraph.source_start >= comment.source_end);
+        if let Some(paragraph) = paragraph {
+            comment.paragraph_ordinal = Some(paragraph.ordinal);
+            if paragraph.id.is_none() && valid_anchor(&comment.raw_id) {
+                paragraph.id = Some(comment.raw_id.clone());
+                paragraph.id_comment_start = Some(comment.source_start);
+            }
+        }
+    }
+    (paragraphs, comments)
+}
+
+fn paragraph_text(input: &str) -> String {
+    let mut output = String::new();
+    for event in Parser::new_ext(input, Options::all()) {
+        match event {
+            Event::Text(text) | Event::Code(text) => {
+                output.push_str(&text);
+                output.push(' ');
+            }
+            Event::SoftBreak | Event::HardBreak => output.push(' '),
+            _ => {}
+        }
+    }
+    output.trim().to_owned()
 }
 
 fn split_front_matter(
@@ -399,6 +481,30 @@ mod tests {
         let error = parse_document_at("<!-- layout: unknown -->", Path::new("story.md"))
             .expect_err("the invalid directive must fail");
         assert!(error.to_string().contains("story.md"));
+    }
+
+    #[test]
+    fn associates_paragraph_comments_with_prose_only() {
+        let parsed = parse_document(
+            "# Title\n\n<!-- paragraph: opening-rain -->\n\nRain *whispered* against the windows.\n\n- Not prose\n\n<!-- paragraph: edgar-waits -->\n\nEdgar waited.",
+        )
+        .unwrap();
+        assert_eq!(parsed.paragraphs.len(), 2);
+        assert_eq!(parsed.paragraphs[0].id.as_deref(), Some("opening-rain"));
+        assert_eq!(parsed.paragraphs[0].word_count, 5);
+        assert_eq!(parsed.paragraphs[1].id.as_deref(), Some("edgar-waits"));
+        assert_eq!(parsed.paragraph_comments.len(), 2);
+        assert!(parsed.source_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn retains_malformed_and_orphaned_paragraph_comments_for_validation() {
+        let parsed =
+            parse_document("<!-- paragraph: Bad ID -->\n\nText\n\n<!-- paragraph: ending -->")
+                .unwrap();
+        assert_eq!(parsed.paragraphs[0].id, None);
+        assert_eq!(parsed.paragraph_comments[0].raw_id, "Bad ID");
+        assert_eq!(parsed.paragraph_comments[1].paragraph_ordinal, None);
     }
 
     proptest! {

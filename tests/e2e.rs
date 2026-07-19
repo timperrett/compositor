@@ -43,7 +43,9 @@ fn project() -> tempfile::TempDir {
         "---\nid: magic\ntitle: Magic\n---\nA collection.\n",
     )
     .unwrap();
-    fs::write(compendium.join("01-story.md"), "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\nOnce upon a time.\n\n---\nA second unit stays the same.\n").unwrap();
+    let story = compendium.join("01-story");
+    fs::create_dir_all(&story).unwrap();
+    fs::write(story.join("story.md"), "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\nOnce upon a time.\n\n---\nA second unit stays the same.\n").unwrap();
     directory
 }
 
@@ -59,7 +61,9 @@ fn replace_story_with_units(directory: &tempfile::TempDir, unit_words: &[usize])
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory
+            .path()
+            .join("compendiums/01-magic/01-story/story.md"),
         format!("---\nid: story\ntitle: Story\n---\n{units}\n"),
     )
     .unwrap();
@@ -67,7 +71,9 @@ fn replace_story_with_units(directory: &tempfile::TempDir, unit_words: &[usize])
 
 fn replace_story_with_text(directory: &tempfile::TempDir, text: &str) {
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory
+            .path()
+            .join("compendiums/01-magic/01-story/story.md"),
         format!("---\nid: story\ntitle: Story\n---\n<!-- anchor: unit-0 -->\n{text}\n"),
     )
     .unwrap();
@@ -117,12 +123,14 @@ fn unchanged_build_is_a_no_op() {
 fn build_generates_plain_text_layout_exports_without_markdown() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: opening -->\n# A Story Display Title\n\n# A **bold** beginning\n\nA [linked](https://example.com) paragraph.\n\n- First item\n- Second item\n\n---\n\n> A closing quotation.\n",
     )
     .unwrap();
+    let second = directory.path().join("compendiums/01-magic/02-second");
+    fs::create_dir_all(&second).unwrap();
     fs::write(
-        directory.path().join("compendiums/01-magic/02-second.md"),
+        second.join("story.md"),
         "---\nid: second\ntitle: Second Story\n---\n# Magic\n\nSecond body.\n",
     )
     .unwrap();
@@ -154,7 +162,9 @@ fn unchanged_build_restores_missing_plain_text_export_and_source_edits_refresh_i
     let directory = project();
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let source = directory.path().join("compendiums/01-magic/01-story.md");
+    let source = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     let original_source = fs::read_to_string(&source).unwrap();
     let export = directory.path().join("output/text/story.txt");
     fs::remove_file(&export).unwrap();
@@ -179,7 +189,9 @@ fn local_edit_keeps_anchored_unit_identity() {
     let directory = project();
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let story = directory.path().join("compendiums/01-magic/01-story.md");
+    let story = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     let source = fs::read_to_string(&story)
         .unwrap()
         .replace("Once upon a time.", "Once upon a sunny time.");
@@ -205,7 +217,9 @@ fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
     replace_story_with_units(&directory, &[100, 100]);
     let config = Config::load(directory.path()).unwrap();
     build::build(directory.path(), &config, None).unwrap();
-    let story = directory.path().join("compendiums/01-magic/01-story.md");
+    let story = directory
+        .path()
+        .join("compendiums/01-magic/01-story/story.md");
     fs::write(
         &story,
         fs::read_to_string(&story).unwrap().replacen(
@@ -231,7 +245,7 @@ fn conservative_plan_keeps_unaffected_assignments_on_their_existing_pages() {
 fn artwork_requirements_are_generated_without_legacy_briefs() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\n<!-- layout: full-spread -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -253,7 +267,7 @@ fn artwork_requirements_are_generated_without_legacy_briefs() {
 fn art_layout_controls_surface_and_requirement_geometry() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: page-art -->\n<!-- art: A page illustration. -->\n<!-- art-layout: surface=single-page orientation=portrait height=50% -->\nPage art.\n\n---\n\n<!-- anchor: spread-art -->\n<!-- art: A spread illustration. -->\n<!-- art-layout: surface=double-page-spread orientation=landscape height=50% -->\nSpread art.\n",
     )
     .unwrap();
@@ -288,7 +302,7 @@ fn art_layout_controls_surface_and_requirement_geometry() {
 fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- layout: full-page -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -461,7 +475,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
 fn strict_art_validation_rejects_missing_legacy_or_unknown_page_treatments() {
     let directory = project();
     fs::write(
-        directory.path().join("compendiums/01-magic/01-story.md"),
+        directory.path().join("compendiums/01-magic/01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\n<!-- anchor: reveal -->\n<!-- art: A moonlit library. -->\nEdgar opens the book.\n",
     )
     .unwrap();
@@ -695,8 +709,9 @@ fn cli_initializes_and_builds_json_output() {
         "---\nid: magic\ntitle: Magic\n---\nNotes.\n",
     )
     .unwrap();
+    fs::create_dir_all(compendium.join("01-story")).unwrap();
     fs::write(
-        compendium.join("01-story.md"),
+        compendium.join("01-story/story.md"),
         "---\nid: story\ntitle: Story\n---\nText.\n",
     )
     .unwrap();

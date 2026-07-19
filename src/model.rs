@@ -27,8 +27,33 @@ pub struct Story {
     pub source: String,
     pub ordinal: usize,
     pub compendium_id: String,
+    pub source_hash: String,
     pub metadata: BTreeMap<String, serde_yaml::Value>,
     pub units: Vec<Unit>,
+    pub paragraphs: Vec<SourceParagraph>,
+    pub paragraph_comments: Vec<ParagraphComment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceParagraph {
+    pub ordinal: usize,
+    pub source_start: usize,
+    pub source_end: usize,
+    pub content: String,
+    pub word_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_comment_start: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParagraphComment {
+    pub raw_id: String,
+    pub source_start: usize,
+    pub source_end: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paragraph_ordinal: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
