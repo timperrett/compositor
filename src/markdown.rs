@@ -1,13 +1,13 @@
-use crate::model::{ArtLayout, ArtOrientation, ArtSurface, Directives, Unit};
+use crate::model::{ArtLayout, ArtOrientation, ArtSurface, Directives, PageLayout, Unit, UnitType};
 use crate::AppError;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct ParsedDocument {
     pub metadata: BTreeMap<String, serde_yaml::Value>,
-    pub body: String,
     pub units: Vec<Unit>,
 }
 
@@ -45,10 +45,17 @@ pub fn parse_document(input: &str) -> Result<ParsedDocument, AppError> {
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    Ok(ParsedDocument {
-        metadata,
-        body,
-        units,
+    Ok(ParsedDocument { metadata, units })
+}
+
+/// Parses a Markdown source file and prefixes input errors with the authored
+/// source path so callers can report a directly actionable diagnostic.
+pub fn parse_document_at(input: &str, source: &Path) -> Result<ParsedDocument, AppError> {
+    parse_document(input).map_err(|error| match error {
+        AppError::Config(crate::ConfigError::Invalid { message }) => {
+            AppError::config(format!("{}: {message}", source.display()))
+        }
+        error => error,
     })
 }
 
@@ -60,12 +67,12 @@ fn split_front_matter(
         return Ok((BTreeMap::new(), normalized));
     }
     let Some(end) = normalized[4..].find("\n---\n") else {
-        return Err(AppError::Config("unterminated YAML front matter".into()));
+        return Err(AppError::config("unterminated YAML front matter".into()));
     };
     let end = end + 4;
     let yaml = &normalized[4..end];
     let metadata = serde_yaml::from_str(yaml)
-        .map_err(|error| AppError::Config(format!("invalid YAML front matter: {error}")))?;
+        .map_err(|error| AppError::config(format!("invalid YAML front matter: {error}")))?;
     Ok((metadata, normalized[end + 5..].to_string()))
 }
 
@@ -103,18 +110,18 @@ fn parse_directives(content: &str) -> Result<Directives, AppError> {
         match name.trim() {
             "anchor" => {
                 if result.anchor.is_some() {
-                    return Err(AppError::Config(
+                    return Err(AppError::config(
                         "multiple anchor directives in one unit".into(),
                     ));
                 }
                 if !valid_anchor(value) {
-                    return Err(AppError::Config(format!("invalid anchor `{value}`")));
+                    return Err(AppError::config(format!("invalid anchor `{value}`")));
                 }
                 result.anchor = Some(value.into());
             }
             "art" => {
                 if result.art.is_some() {
-                    return Err(AppError::Config(
+                    return Err(AppError::config(
                         "multiple art directives in one unit".into(),
                     ));
                 }
@@ -122,48 +129,24 @@ fn parse_directives(content: &str) -> Result<Directives, AppError> {
             }
             "art-layout" => {
                 if result.art_layout.is_some() {
-                    return Err(AppError::Config(
+                    return Err(AppError::config(
                         "multiple art-layout directives in one unit".into(),
                     ));
                 }
                 result.art_layout = Some(parse_art_layout(value)?);
             }
             "layout" => {
-                if !matches!(
-                    value,
-                    "auto"
-                        | "text-dominant"
-                        | "art-dominant"
-                        | "full-page"
-                        | "full-spread"
-                        | "facing-art"
-                        | "spot-art"
-                        | "illustration-only"
-                ) {
-                    return Err(AppError::Config(format!("unsupported layout `{value}`")));
-                }
-                result.layout = Some(value.into());
+                result.layout = Some(parse_layout(value)?);
             }
             "unit" => {
-                if !matches!(
-                    value,
-                    "narrative"
-                        | "transition"
-                        | "story-opening"
-                        | "story-closing"
-                        | "illustration-only"
-                        | "blank"
-                ) {
-                    return Err(AppError::Config(format!("unsupported unit type `{value}`")));
-                }
-                result.unit_type = Some(value.into());
+                result.unit_type = Some(parse_unit_type(value)?);
             }
             _ if name.trim().starts_with("anchor")
                 || name.trim().starts_with("art")
                 || name.trim().starts_with("layout")
                 || name.trim().starts_with("unit") =>
             {
-                return Err(AppError::Config(format!(
+                return Err(AppError::config(format!(
                     "unsupported directive `{}`",
                     name.trim()
                 )))
@@ -172,6 +155,32 @@ fn parse_directives(content: &str) -> Result<Directives, AppError> {
         }
     }
     Ok(result)
+}
+
+fn parse_layout(value: &str) -> Result<PageLayout, AppError> {
+    match value {
+        "auto" => Ok(PageLayout::Auto),
+        "text-dominant" => Ok(PageLayout::TextDominant),
+        "art-dominant" => Ok(PageLayout::ArtDominant),
+        "full-page" => Ok(PageLayout::FullPage),
+        "full-spread" => Ok(PageLayout::FullSpread),
+        "facing-art" => Ok(PageLayout::FacingArt),
+        "spot-art" => Ok(PageLayout::SpotArt),
+        "illustration-only" => Ok(PageLayout::IllustrationOnly),
+        _ => Err(AppError::config(format!("unsupported layout `{value}`"))),
+    }
+}
+
+fn parse_unit_type(value: &str) -> Result<UnitType, AppError> {
+    match value {
+        "narrative" => Ok(UnitType::Narrative),
+        "transition" => Ok(UnitType::Transition),
+        "story-opening" => Ok(UnitType::StoryOpening),
+        "story-closing" => Ok(UnitType::StoryClosing),
+        "illustration-only" => Ok(UnitType::IllustrationOnly),
+        "blank" => Ok(UnitType::Blank),
+        _ => Err(AppError::config(format!("unsupported unit type `{value}`"))),
+    }
 }
 
 pub fn valid_anchor(value: &str) -> bool {
@@ -258,7 +267,7 @@ fn parse_art_layout(value: &str) -> Result<ArtLayout, AppError> {
     let mut height_percent = None;
     for token in value.split_whitespace() {
         let Some((key, raw_value)) = token.split_once('=') else {
-            return Err(AppError::Config(format!(
+            return Err(AppError::config(format!(
                 "art-layout fields must use key=value syntax: `{token}`"
             )));
         };
@@ -268,7 +277,7 @@ fn parse_art_layout(value: &str) -> Result<ArtLayout, AppError> {
                     "single-page" => ArtSurface::SinglePage,
                     "double-page-spread" => ArtSurface::DoublePageSpread,
                     _ => {
-                        return Err(AppError::Config(format!(
+                        return Err(AppError::config(format!(
                             "unsupported art-layout surface `{raw_value}`"
                         )))
                     }
@@ -279,7 +288,7 @@ fn parse_art_layout(value: &str) -> Result<ArtLayout, AppError> {
                     "portrait" => ArtOrientation::Portrait,
                     "landscape" => ArtOrientation::Landscape,
                     _ => {
-                        return Err(AppError::Config(format!(
+                        return Err(AppError::config(format!(
                             "unsupported art-layout orientation `{raw_value}`"
                         )))
                     }
@@ -287,36 +296,36 @@ fn parse_art_layout(value: &str) -> Result<ArtLayout, AppError> {
             }
             "height" if height_percent.is_none() => {
                 let raw = raw_value.strip_suffix('%').ok_or_else(|| {
-                    AppError::Config("art-layout height must be a percentage".into())
+                    AppError::config("art-layout height must be a percentage".into())
                 })?;
                 let value = raw.parse::<u8>().map_err(|_| {
-                    AppError::Config(format!("invalid art-layout height `{raw_value}`"))
+                    AppError::config(format!("invalid art-layout height `{raw_value}`"))
                 })?;
                 if !(1..=100).contains(&value) {
-                    return Err(AppError::Config(
+                    return Err(AppError::config(
                         "art-layout height must be between 1% and 100%".into(),
                     ));
                 }
                 height_percent = Some(value);
             }
             "surface" | "orientation" | "height" => {
-                return Err(AppError::Config(format!(
+                return Err(AppError::config(format!(
                     "duplicate art-layout field `{key}`"
                 )))
             }
             _ => {
-                return Err(AppError::Config(format!(
+                return Err(AppError::config(format!(
                     "unsupported art-layout field `{key}`"
                 )))
             }
         }
     }
     Ok(ArtLayout {
-        surface: surface.ok_or_else(|| AppError::Config("art-layout requires surface".into()))?,
+        surface: surface.ok_or_else(|| AppError::config("art-layout requires surface".into()))?,
         orientation: orientation
-            .ok_or_else(|| AppError::Config("art-layout requires orientation".into()))?,
+            .ok_or_else(|| AppError::config("art-layout requires orientation".into()))?,
         height_percent: height_percent
-            .ok_or_else(|| AppError::Config("art-layout requires height".into()))?,
+            .ok_or_else(|| AppError::config("art-layout requires height".into()))?,
     })
 }
 
@@ -337,6 +346,8 @@ pub fn content_hash(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::path::Path;
 
     #[test]
     fn ignores_rules_in_code_and_quotes() {
@@ -381,5 +392,24 @@ mod tests {
     fn ignores_directive_comments_in_code() {
         let parsed = parse_document("```html\n<!-- anchor: not-an-anchor -->\n```").unwrap();
         assert!(parsed.units[0].directives.anchor.is_none());
+    }
+
+    #[test]
+    fn source_aware_parse_errors_name_the_authored_file() {
+        let error = parse_document_at("<!-- layout: unknown -->", Path::new("story.md"))
+            .expect_err("the invalid directive must fail");
+        assert!(error.to_string().contains("story.md"));
+    }
+
+    proptest! {
+        #[test]
+        fn parser_never_panics_for_arbitrary_text(input in any::<String>()) {
+            let _ = parse_document(&input);
+        }
+
+        #[test]
+        fn normalization_is_idempotent(input in any::<String>()) {
+            prop_assert_eq!(normalize(&normalize(&input)), normalize(&input));
+        }
     }
 }

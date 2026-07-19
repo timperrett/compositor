@@ -1,4 +1,5 @@
-use crate::AppError;
+use crate::model::{BookOrientation, BuildMode};
+use crate::{AppError, ConfigError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -58,7 +59,7 @@ pub struct MarkdownConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BuildConfig {
-    pub default_mode: String,
+    pub default_mode: BuildMode,
     pub similarity_threshold: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +67,7 @@ pub struct BuildConfig {
 pub struct BookConfig {
     pub trim_width_in: f64,
     pub trim_height_in: f64,
-    pub orientation: String,
+    pub orientation: BookOrientation,
     pub bleed_in: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +155,7 @@ impl Default for MarkdownConfig {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
-            default_mode: "conservative".into(),
+            default_mode: BuildMode::Conservative,
             similarity_threshold: 0.82,
         }
     }
@@ -164,7 +165,7 @@ impl Default for BookConfig {
         Self {
             trim_width_in: 8.0,
             trim_height_in: 10.0,
-            orientation: "portrait".into(),
+            orientation: BookOrientation::Portrait,
             bleed_in: 0.125,
         }
     }
@@ -194,12 +195,20 @@ impl Default for ArtLayoutConfig {
 impl Config {
     pub fn load(root: &Path) -> Result<Self, AppError> {
         let path = root.join("compositor.toml");
-        let text = fs::read_to_string(&path)
-            .map_err(|_| AppError::Config(format!("missing configuration: {}", path.display())))?;
-        let value: Self =
-            toml::from_str(&text).map_err(|error| AppError::Config(error.to_string()))?;
+        let text = fs::read_to_string(&path).map_err(|source| {
+            AppError::Config(ConfigError::Read {
+                path: path.clone(),
+                source,
+            })
+        })?;
+        let value: Self = toml::from_str(&text).map_err(|source| {
+            AppError::Config(ConfigError::Parse {
+                path: path.clone(),
+                source,
+            })
+        })?;
         if value.schema_version != crate::model::SCHEMA_VERSION {
-            return Err(AppError::Config(format!(
+            return Err(AppError::config(format!(
                 "unsupported schema_version {}",
                 value.schema_version
             )));
@@ -211,17 +220,17 @@ impl Config {
     fn validate(&self) -> Result<(), AppError> {
         let pagination = &self.pagination;
         if pagination.target_words_per_text_page == 0 {
-            return Err(AppError::Config(
+            return Err(AppError::config(
                 "pagination.target_words_per_text_page must be greater than zero".into(),
             ));
         }
         if pagination.maximum_words_per_text_page == 0 {
-            return Err(AppError::Config(
+            return Err(AppError::config(
                 "pagination.maximum_words_per_text_page must be greater than zero".into(),
             ));
         }
         if pagination.target_words_per_text_page > pagination.maximum_words_per_text_page {
-            return Err(AppError::Config(
+            return Err(AppError::config(
                 "pagination.target_words_per_text_page must not exceed pagination.maximum_words_per_text_page".into(),
             ));
         }
@@ -229,13 +238,8 @@ impl Config {
             || self.book.trim_height_in <= 0.0
             || self.book.bleed_in < 0.0
         {
-            return Err(AppError::Config(
+            return Err(AppError::config(
                 "book dimensions must be positive and bleed must not be negative".into(),
-            ));
-        }
-        if !matches!(self.book.orientation.as_str(), "portrait" | "landscape") {
-            return Err(AppError::Config(
-                "book.orientation must be `portrait` or `landscape`".into(),
             ));
         }
         if self.art_layout.pixels_per_inch <= 0.0
@@ -249,7 +253,7 @@ impl Config {
             .into_iter()
             .any(|fraction| fraction <= 0.0 || fraction > 1.0)
         {
-            return Err(AppError::Config(
+            return Err(AppError::config(
                 "art_layout dimensions and width envelopes must be positive; width envelopes must not exceed 1".into(),
             ));
         }

@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::model::{
-    ChangeKind, ChangeSet, Manifest, Severity, SourceProject, ValidationIssue, ValidationReport,
+    ChangeKind, ChangeSet, Manifest, Severity, SourceProject, UnitType, ValidationIssue,
+    ValidationReport,
 };
 use crate::storage;
 use std::collections::BTreeSet;
@@ -24,7 +25,7 @@ pub fn validate(project: &SourceProject) -> ValidationReport {
                 );
             }
             for unit in &story.units {
-                let is_blank = unit.directives.unit_type.as_deref() == Some("blank");
+                let is_blank = unit.directives.unit_type == Some(UnitType::Blank);
                 if unit.normalized_content.is_empty() && !is_blank {
                     issue(
                         &mut report,

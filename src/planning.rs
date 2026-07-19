@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::identity::ResolvedStory;
 use crate::model::{
-    ArtSurface, ArtifactStatus, PageAssignment, PageFragment, PagePlan, Story, Unit, SCHEMA_VERSION,
+    ArtSurface, ArtifactStatus, PageAssignment, PageFragment, PageLayout, PagePlan, Story, Unit,
+    UnitType, SCHEMA_VERSION,
 };
 use crate::storage;
 use crate::AppError;
@@ -9,24 +10,25 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub fn make_plan(
-    root: &Path,
-    config: &Config,
-    story: &Story,
-    resolved: &ResolvedStory,
-    manifest_revision: u64,
-    preserve_assignments: bool,
-) -> Result<PagePlan, AppError> {
-    let previous = storage::load_latest_plan(root, config, &story.id)?;
-    let fingerprint = config.pagination_fingerprint();
+pub(crate) struct PlanRequest<'a> {
+    pub root: &'a Path,
+    pub config: &'a Config,
+    pub story: &'a Story,
+    pub resolved: &'a ResolvedStory,
+    pub manifest_revision: u64,
+    pub preserve_assignments: bool,
+}
+
+pub(crate) fn make_plan(request: PlanRequest<'_>) -> Result<PagePlan, AppError> {
+    let previous = storage::load_latest_plan(request.root, request.config, &request.story.id)?;
+    let fingerprint = request.config.pagination_fingerprint();
     let mut warnings = Vec::new();
-    let mut assignments = if preserve_assignments
-        && previous
-            .as_ref()
-            .is_some_and(|plan| plan.pagination_fingerprint == fingerprint)
+    let mut assignments = if let Some(previous) = previous
+        .as_ref()
+        .filter(|plan| request.preserve_assignments && plan.pagination_fingerprint == fingerprint)
     {
-        let previous = previous.as_ref().expect("checked above");
-        let (mut retained, assigned) = retained_assignments(previous, story, resolved);
+        let (mut retained, assigned) =
+            retained_assignments(previous, request.story, request.resolved);
         if !retained.is_empty() {
             warnings.push("conservative planning retained unchanged page assignments; changed units were planned after the retained pages".into());
         }
@@ -38,23 +40,35 @@ pub fn make_plan(
             .unwrap_or(0)
             + 1;
         retained.extend(fresh_assignments_from(
-            story,
-            resolved,
-            config,
-            next_page,
-            &assigned,
+            FreshPlanningRequest {
+                story: request.story,
+                resolved: request.resolved,
+                config: request.config,
+                next_page,
+                assigned_ids: &assigned,
+            },
             &mut warnings,
         ));
         retained
     } else {
-        fresh_assignments(story, resolved, config, &mut warnings)
+        fresh_assignments(
+            request.story,
+            request.resolved,
+            request.config,
+            &mut warnings,
+        )
     };
-    attach_art_ids(&mut assignments, story, resolved, &mut warnings);
+    attach_art_ids(
+        &mut assignments,
+        request.story,
+        request.resolved,
+        &mut warnings,
+    );
     let revision = previous.map(|plan| plan.revision + 1).unwrap_or(1);
     Ok(PagePlan {
         schema_version: SCHEMA_VERSION,
-        story_id: story.id.clone(),
-        manifest_revision,
+        story_id: request.story.id.clone(),
+        manifest_revision: request.manifest_revision,
         revision,
         pagination_fingerprint: fingerprint,
         status: ArtifactStatus::Candidate,
@@ -105,17 +119,37 @@ fn fresh_assignments(
     config: &Config,
     warnings: &mut Vec<String>,
 ) -> Vec<PageAssignment> {
-    fresh_assignments_from(story, resolved, config, 1, &BTreeSet::new(), warnings)
+    fresh_assignments_from(
+        FreshPlanningRequest {
+            story,
+            resolved,
+            config,
+            next_page: 1,
+            assigned_ids: &BTreeSet::new(),
+        },
+        warnings,
+    )
+}
+
+struct FreshPlanningRequest<'a> {
+    story: &'a Story,
+    resolved: &'a ResolvedStory,
+    config: &'a Config,
+    next_page: u32,
+    assigned_ids: &'a BTreeSet<String>,
 }
 
 fn fresh_assignments_from(
-    story: &Story,
-    resolved: &ResolvedStory,
-    config: &Config,
-    mut next_page: u32,
-    assigned_ids: &BTreeSet<String>,
+    request: FreshPlanningRequest<'_>,
     warnings: &mut Vec<String>,
 ) -> Vec<PageAssignment> {
+    let FreshPlanningRequest {
+        story,
+        resolved,
+        config,
+        mut next_page,
+        assigned_ids,
+    } = request;
     let mut assignments = Vec::new();
     let mut text_fragments = Vec::new();
     let mut text_words = 0;
@@ -141,18 +175,22 @@ fn fresh_assignments_from(
         }
         let layout = layout_for(unit);
         if let Some(art_layout) = &unit.directives.art_layout {
-            if layout == "full-page" && matches!(art_layout.surface, ArtSurface::DoublePageSpread) {
+            if layout == PageLayout::FullPage
+                && matches!(art_layout.surface, ArtSurface::DoublePageSpread)
+            {
                 warnings.push(format!(
                     "unit {id} combines layout `full-page` with art-layout surface `double-page-spread`"
                 ));
             }
-            if layout == "full-spread" && matches!(art_layout.surface, ArtSurface::SinglePage) {
+            if layout == PageLayout::FullSpread
+                && matches!(art_layout.surface, ArtSurface::SinglePage)
+            {
                 warnings.push(format!(
                     "unit {id} combines layout `full-spread` with art-layout surface `single-page`"
                 ));
             }
         }
-        if layout != "text-dominant" || unit.directives.art_layout.is_some() {
+        if layout != PageLayout::TextDominant || unit.directives.art_layout.is_some() {
             if keep_with_next {
                 warnings.push(format!(
                     "unit {id} requests keep-with-next, but the following unit has layout `{layout}`"
@@ -170,7 +208,7 @@ fn fresh_assignments_from(
                 .art_layout
                 .as_ref()
                 .is_some_and(|layout| matches!(layout.surface, ArtSurface::DoublePageSpread))
-                || layout == "full-spread"
+                || layout == PageLayout::FullSpread
             {
                 vec![next_page, next_page + 1]
             } else {
@@ -181,7 +219,7 @@ fn fresh_assignments_from(
                 pages,
                 units: vec![id.clone()],
                 fragments: vec![whole_unit_fragment(id, unit)],
-                layout: layout.into(),
+                layout,
                 word_count: unit.word_count,
                 art_id: None,
             });
@@ -363,7 +401,7 @@ fn text_assignment(page: u32, fragments: Vec<PageFragment>, word_count: usize) -
         pages: vec![page],
         units,
         fragments,
-        layout: "text-dominant".into(),
+        layout: PageLayout::TextDominant,
         word_count,
         art_id: None,
     }
@@ -404,15 +442,7 @@ fn attach_art_ids(
 pub fn art_needed(unit: &Unit) -> bool {
     unit.directives.art.is_some()
         || unit.directives.art_layout.is_some()
-        || matches!(
-            layout_for(unit),
-            "art-dominant"
-                | "full-page"
-                | "full-spread"
-                | "facing-art"
-                | "spot-art"
-                | "illustration-only"
-        )
+        || layout_for(unit).requires_artwork()
 }
 
 fn should_break_before(current: usize, incoming: usize, target: usize, maximum: usize) -> bool {
@@ -423,12 +453,57 @@ fn should_break_before(current: usize, incoming: usize, target: usize, maximum: 
     proposed > target && proposed - target > target - current
 }
 
-fn layout_for(unit: &Unit) -> &str {
-    unit.directives.layout.as_deref().unwrap_or_else(|| {
-        if unit.directives.unit_type.as_deref() == Some("illustration-only") {
-            "illustration-only"
+fn layout_for(unit: &Unit) -> PageLayout {
+    unit.directives.layout.unwrap_or_else(|| {
+        if unit.directives.unit_type == Some(UnitType::IllustrationOnly) {
+            PageLayout::IllustrationOnly
         } else {
-            "text-dominant"
+            PageLayout::TextDominant
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Directives;
+    use proptest::prelude::*;
+
+    fn unit(content: String) -> Unit {
+        let word_count = content.split_whitespace().count();
+        Unit {
+            ordinal: 1,
+            source_start: 0,
+            source_end: content.len(),
+            normalized_content: content.clone(),
+            content_hash: crate::markdown::content_hash(&content),
+            content,
+            word_count,
+            directives: Directives::default(),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn fragments_cover_each_word_once_and_never_exceed_the_maximum(
+            words in prop::collection::vec("[a-z]{1,12}", 0..300),
+            target in 1usize..60,
+            maximum in 1usize..80,
+        ) {
+            prop_assume!(target <= maximum);
+            let source = words.join(" ");
+            let unit = unit(source);
+            let mut warnings = Vec::new();
+            let fragments = text_fragments_for(&unit, "unit", target, maximum, &mut warnings);
+
+            let mut next_start = 0;
+            for fragment in &fragments {
+                prop_assert_eq!(fragment.start_word, next_start);
+                prop_assert!(fragment.end_word > fragment.start_word || unit.word_count == 0);
+                prop_assert!(fragment.end_word - fragment.start_word <= maximum);
+                next_start = fragment.end_word;
+            }
+            prop_assert_eq!(next_start, unit.word_count);
+        }
+    }
 }

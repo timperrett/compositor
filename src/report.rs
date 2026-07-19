@@ -21,7 +21,9 @@ pub fn render<T: Serialize + std::fmt::Debug>(
             validation,
         })
         .map(|value| format!("{value}\n"))
-        .map_err(|error| crate::AppError::Serialization(error.to_string())),
+        .map_err(|source| {
+            crate::AppError::Serialization(crate::SerializationError::Output { source })
+        }),
         OutputFormat::Human => {
             let mut output = format!("{command}\n{data:#?}\n");
             if !validation.issues.is_empty() {

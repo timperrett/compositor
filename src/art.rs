@@ -1,7 +1,7 @@
 use crate::identity::ResolvedStory;
 use crate::model::{
     ArtGeometry, ArtLayout, ArtOrientation, ArtSurface, ArtifactStatus, IllustrationRequirement,
-    PagePlan, Story, SCHEMA_VERSION,
+    PageLayout, PagePlan, Story, SCHEMA_VERSION,
 };
 use crate::planning::art_needed;
 use crate::storage;
@@ -34,8 +34,8 @@ pub fn sync_requirements(
             .assignments
             .iter()
             .find(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
-            .map(|assignment| assignment.layout.clone())
-            .unwrap_or_else(|| "text-dominant".into());
+            .map(|assignment| assignment.layout)
+            .unwrap_or(PageLayout::TextDominant);
         let previous = storage::load_latest_requirement(root, config, id)?;
         if let Some(previous) = previous.as_ref() {
             if previous.story_id == story.id

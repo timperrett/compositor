@@ -3,12 +3,11 @@
 //! without claiming an aesthetic judgment about the resulting layout.
 
 use crate::model::PagePlan;
-pub use crate::model::{Change, ChangeKind, ChangeSet};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PlanDiff {
+pub(crate) struct PlanDiff {
     pub story_id: String,
     pub before_revision: u64,
     pub after_revision: u64,
@@ -17,7 +16,7 @@ pub struct PlanDiff {
     pub added: Vec<String>,
 }
 
-pub fn compare_plans(before: &PagePlan, after: &PagePlan) -> PlanDiff {
+pub(crate) fn compare_plans(before: &PagePlan, after: &PagePlan) -> PlanDiff {
     let before_items = before
         .assignments
         .iter()
@@ -38,7 +37,7 @@ pub fn compare_plans(before: &PagePlan, after: &PagePlan) -> PlanDiff {
     }
 }
 
-pub fn render_plan_diff_html(diff: &PlanDiff) -> String {
+pub(crate) fn render_plan_diff_html(diff: &PlanDiff) -> String {
     fn list(title: &str, values: &[String]) -> String {
         let items = values
             .iter()

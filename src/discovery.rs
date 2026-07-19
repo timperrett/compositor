@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::markdown::parse_document;
+use crate::markdown::parse_document_at;
 use crate::model::{Compendium, SourceProject, Story};
 use crate::AppError;
 use std::collections::BTreeMap;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError> {
     let base = root.join(&config.source.compendiums_dir);
     if !base.is_dir() {
-        return Err(AppError::Config(format!(
+        return Err(AppError::config(format!(
             "compendiums directory does not exist: {}",
             base.display()
         )));
@@ -19,12 +19,12 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
     for (ordinal, directory) in directories.drain(..).enumerate() {
         let index = directory.join("index.md");
         if !index.is_file() {
-            return Err(AppError::Config(format!(
+            return Err(AppError::config(format!(
                 "missing compendium index: {}",
                 index.display()
             )));
         }
-        let parsed_index = parse_document(&fs::read_to_string(&index)?)?;
+        let parsed_index = parse_document_at(&fs::read_to_string(&index)?, &index)?;
         let id = required_metadata(&parsed_index.metadata, "id", &index)?;
         let title = required_metadata(&parsed_index.metadata, "title", &index)?;
         let mut files = read_sorted(
@@ -37,7 +37,7 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
         )?;
         let mut stories = Vec::new();
         for (story_ordinal, path) in files.drain(..).enumerate() {
-            let parsed = parse_document(&fs::read_to_string(&path)?)?;
+            let parsed = parse_document_at(&fs::read_to_string(&path)?, &path)?;
             let story_id = required_metadata(&parsed.metadata, "id", &path)?;
             let story_title = required_metadata(&parsed.metadata, "title", &path)?;
             stories.push(Story {
@@ -92,7 +92,7 @@ fn required_metadata(
         .get(key)
         .and_then(serde_yaml::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| AppError::Config(format!("missing `{key}` in {}", path.display())))
+        .ok_or_else(|| AppError::config(format!("missing `{key}` in {}", path.display())))
 }
 
 fn relative(root: &Path, path: &Path) -> String {

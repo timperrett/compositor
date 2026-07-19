@@ -48,9 +48,83 @@ pub struct Directives {
     pub anchor: Option<String>,
     pub art: Option<String>,
     pub art_layout: Option<ArtLayout>,
-    pub layout: Option<String>,
+    pub layout: Option<PageLayout>,
     pub keep_with_next: bool,
-    pub unit_type: Option<String>,
+    pub unit_type: Option<UnitType>,
+}
+
+/// The authored layout treatment for a content unit.
+///
+/// The kebab-case serialization is part of the persisted plan and Markdown
+/// directive contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PageLayout {
+    Auto,
+    TextDominant,
+    ArtDominant,
+    FullPage,
+    FullSpread,
+    FacingArt,
+    SpotArt,
+    IllustrationOnly,
+}
+
+impl PageLayout {
+    /// Returns the stable spelling used by reports, persisted artifacts, and
+    /// authored Markdown directives.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::TextDominant => "text-dominant",
+            Self::ArtDominant => "art-dominant",
+            Self::FullPage => "full-page",
+            Self::FullSpread => "full-spread",
+            Self::FacingArt => "facing-art",
+            Self::SpotArt => "spot-art",
+            Self::IllustrationOnly => "illustration-only",
+        }
+    }
+
+    /// Returns whether this layout requires an illustration artifact.
+    pub const fn requires_artwork(self) -> bool {
+        !matches!(self, Self::Auto | Self::TextDominant)
+    }
+}
+
+impl std::fmt::Display for PageLayout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// The finite set of non-layout unit categories accepted in Markdown.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnitType {
+    Narrative,
+    Transition,
+    StoryOpening,
+    StoryClosing,
+    Blank,
+    IllustrationOnly,
+}
+
+/// The physical orientation of a book trim size.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BookOrientation {
+    Portrait,
+    Landscape,
+}
+
+/// The strategy used when producing a page plan.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildMode {
+    Conservative,
+    Rebalance,
+    Fresh,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,7 +307,7 @@ pub struct PageAssignment {
     /// rendered in full.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fragments: Vec<PageFragment>,
-    pub layout: String,
+    pub layout: PageLayout,
     pub word_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub art_id: Option<String>,
@@ -258,7 +332,7 @@ pub struct IllustrationRequirement {
     pub story_id: String,
     pub unit_ids: Vec<String>,
     pub pages: Vec<u32>,
-    pub layout: String,
+    pub layout: PageLayout,
     pub status: ArtifactStatus,
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -16,7 +16,7 @@ pub fn render_html(story: &Story, plan: &PagePlan, manifest_story: &ManifestStor
                 .map(|fragment| render_fragment(story, manifest_story, fragment))
                 .collect::<String>()
         };
-        output.push_str(&format!("<section class=\"page\"><p class=\"meta\">pages {:?} · {} · {}</p><article>{}</article>", assignment.pages, escape(&assignment.units.join(", ")), escape(&assignment.layout), content));
+        output.push_str(&format!("<section class=\"page\"><p class=\"meta\">pages {:?} · {} · {}</p><article>{}</article>", assignment.pages, escape(&assignment.units.join(", ")), assignment.layout, content));
         if let Some(asset) = assignment
             .units
             .iter()
@@ -26,11 +26,7 @@ pub fn render_html(story: &Story, plan: &PagePlan, manifest_story: &ManifestStor
                 "<img alt=\"approved artwork\" src=\"../../{}\">",
                 escape(asset)
             ));
-        } else if assignment.art_id.is_some()
-            || assignment.layout.contains("art")
-            || assignment.layout == "full-page"
-            || assignment.layout == "full-spread"
-        {
+        } else if assignment.art_id.is_some() || assignment.layout.requires_artwork() {
             output.push_str("<p class=\"meta\">[missing artwork]</p>");
         }
         output.push_str("</section>");

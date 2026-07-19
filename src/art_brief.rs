@@ -126,7 +126,7 @@ pub fn load(root: &Path, art_id: &str) -> Result<Option<ArtBrief>, AppError> {
     let text = fs::read_to_string(&path)?;
     serde_yaml::from_str(&text)
         .map(Some)
-        .map_err(|error| AppError::Serialization(format!("{}: {error}", path.display())))
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
 }
 
 pub fn inspect(root: &Path, config: &Config, art_id: &str) -> ArtBriefInspection {
@@ -177,6 +177,12 @@ pub fn validate(
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
     let brief_path = relative(root, &path(root, &brief.art_id));
+    let context = BriefValidationContext {
+        root,
+        brief_path: &brief_path,
+        story_id: &brief.source.story_id,
+        art_id: &brief.art_id,
+    };
     if brief.schema_version != ART_BRIEF_VERSION {
         push(
             &mut report,
@@ -276,27 +282,14 @@ pub fn validate(
             );
         }
         validate_file(
-            root,
+            &context,
             &candidate.file,
-            &brief_path,
-            &brief.source.story_id,
-            &brief.art_id,
-            "candidate",
-            true,
+            FileRole::CandidateImage,
             &mut report,
         );
     }
     for reference in &brief.context.canon_references {
-        validate_file(
-            root,
-            reference,
-            &brief_path,
-            &brief.source.story_id,
-            &brief.art_id,
-            "reference",
-            false,
-            &mut report,
-        );
+        validate_file(&context, reference, FileRole::CanonReference, &mut report);
     }
     if let Some(selection) = &brief.selection {
         if !ids.contains(&selection.candidate_id) {
@@ -317,17 +310,39 @@ pub fn validate(
     report
 }
 
-#[allow(clippy::too_many_arguments)]
+struct BriefValidationContext<'a> {
+    root: &'a Path,
+    brief_path: &'a str,
+    story_id: &'a str,
+    art_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FileRole {
+    CandidateImage,
+    CanonReference,
+}
+
+impl FileRole {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CandidateImage => "candidate",
+            Self::CanonReference => "reference",
+        }
+    }
+
+    const fn requires_image_format(self) -> bool {
+        matches!(self, Self::CandidateImage)
+    }
+}
+
 fn validate_file(
-    root: &Path,
+    context: &BriefValidationContext<'_>,
     value: &str,
-    brief_path: &str,
-    story_id: &str,
-    art_id: &str,
-    kind: &str,
-    image: bool,
+    role: FileRole,
     report: &mut ValidationReport,
 ) {
+    let kind = role.label();
     let candidate = Path::new(value);
     if candidate.is_absolute()
         || candidate.components().any(|component| {
@@ -342,26 +357,26 @@ fn validate_file(
             Severity::Error,
             "unsafe_art_brief_path",
             format!("{kind} path must be project-relative: `{value}`"),
-            brief_path,
-            Some(story_id),
-            Some(art_id),
+            context.brief_path,
+            Some(context.story_id),
+            Some(context.art_id),
         );
         return;
     }
-    let path = root.join(candidate);
+    let path = context.root.join(candidate);
     if !path.is_file() {
         push(
             report,
             Severity::Error,
             "missing_art_brief_file",
             format!("{kind} file does not exist: `{value}`"),
-            brief_path,
-            Some(story_id),
-            Some(art_id),
+            context.brief_path,
+            Some(context.story_id),
+            Some(context.art_id),
         );
         return;
     }
-    if image {
+    if role.requires_image_format() {
         let extension = path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -373,9 +388,9 @@ fn validate_file(
                 Severity::Error,
                 "unsupported_candidate_format",
                 format!("candidate `{value}` must be PNG, JPG, JPEG, or WebP"),
-                brief_path,
-                Some(story_id),
-                Some(art_id),
+                context.brief_path,
+                Some(context.story_id),
+                Some(context.art_id),
             );
         }
     }

@@ -103,7 +103,7 @@ fn resolve_story(
             .map(|(prior_index, old)| (prior_index, similarity(unit, old)))
             .filter(|(_, score)| *score >= config.build.similarity_threshold)
             .collect::<Vec<_>>();
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         if let Some((prior_index, score)) = candidates.first().copied() {
             if candidates
                 .get(1)
@@ -198,10 +198,11 @@ fn inserted(story: &Story, id: &str) -> Change {
 fn provisional_id(story_id: &str, unit: &Unit) -> String {
     format!(
         "{story_id}:u-{}",
-        &unit
-            .content_hash
+        unit.content_hash
             .strip_prefix("sha256:")
-            .unwrap_or(&unit.content_hash)[..6]
+            .unwrap_or(&unit.content_hash)
+            .get(..6)
+            .unwrap_or(&unit.content_hash)
     )
 }
 

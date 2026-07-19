@@ -3,8 +3,9 @@ use crate::config::Config;
 use crate::discovery::discover;
 use crate::identity::{resolve_project, ResolvedStory};
 use crate::manifest::make_manifest;
+pub use crate::model::BuildMode;
 use crate::model::{ChangeSet, Manifest, PagePlan, SourceProject, ValidationReport};
-use crate::planning::make_plan;
+use crate::planning::{make_plan, PlanRequest};
 use crate::storage::{self, load_manifest, load_resolutions};
 use crate::validation::validate;
 use crate::AppError;
@@ -18,13 +19,6 @@ pub struct PreparedBuild {
     pub changes: ChangeSet,
     pub validation: ValidationReport,
     pub previous: Option<Manifest>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildMode {
-    Conservative,
-    Rebalance,
-    Fresh,
 }
 
 pub fn prepare(root: &Path, config: &Config) -> Result<PreparedBuild, AppError> {
@@ -97,20 +91,22 @@ pub fn build_with_mode(
     let manifest_revision = manifest
         .as_ref()
         .or(prepared.previous.as_ref())
-        .expect("a build with plans always has a manifest")
+        .ok_or_else(|| {
+            AppError::command("cannot create a page plan without a manifest revision".into())
+        })?
         .revision;
     let mut plans = Vec::new();
     for compendium in &prepared.project.compendiums {
         for story in &compendium.stories {
             if affected.contains(&story.id) {
-                let plan = make_plan(
+                let plan = make_plan(PlanRequest {
                     root,
                     config,
                     story,
-                    &prepared.resolved[&story.id],
+                    resolved: &prepared.resolved[&story.id],
                     manifest_revision,
-                    mode == BuildMode::Conservative,
-                )?;
+                    preserve_assignments: mode == BuildMode::Conservative,
+                })?;
                 storage::save_plan(root, config, &plan)?;
                 art::sync_requirements(root, config, story, &prepared.resolved[&story.id], &plan)?;
                 plans.push(plan);
