@@ -18,10 +18,14 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 
 ## Commands
 
-`init`, `parse`, `validate`, `status`, `build`, `diff source`, `plan`, `proof`,
+`init`, `parse`, `validate`, `tree`, `status`, `build`, `diff source`, `plan`, `proof`,
 `inspect <story.md>`, `source sync`, `source resolve`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
 the conservative mode only. Use `--format json` for stable machine-readable
 reports.
+
+`tree` prints the ordered compendium and story catalog as `title [id]`, which
+makes story IDs easy to find. Add `--art` to nest art IDs from the corresponding
+story briefs beneath each story.
 
 `inspect <story.md>` reports durable prose-paragraph identifiers and the source
 revision needed by a Story Flow Plan. `validate-flow <story.md> <story.flow.yaml>
