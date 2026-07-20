@@ -152,6 +152,41 @@
     border-color: #a34e32;
   }
 
+  .role-card {
+    min-height: 15rem;
+    padding: 1.5rem;
+    background: rgba(255, 252, 246, 0.58);
+    border: 1px solid #d7cdbf;
+  }
+
+  .handoff-rail {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .handoff-node {
+    display: grid;
+    min-height: 5.5rem;
+    padding: 0.8rem;
+    background: #f6f1e8;
+    border: 1px solid #d7cdbf;
+    gap: 0.35rem;
+  }
+
+  .handoff-node strong {
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-size: 1rem;
+    line-height: 1.08;
+  }
+
+  .handoff-arrow {
+    color: #a34e32;
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+
   .step-number {
     display: grid;
     width: 2.25rem;
@@ -220,6 +255,18 @@
     height: 43%;
     border-radius: 50% 50% 42% 42%;
     transform: rotate(-9deg);
+  }
+}
+
+@media (min-width: 640px) {
+  .handoff-rail {
+    grid-template-columns: 1fr auto 1fr;
+  }
+}
+
+@media (min-width: 1024px) {
+  .handoff-rail {
+    grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
   }
 }
 
