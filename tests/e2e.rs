@@ -33,6 +33,68 @@ fn cli_reports_the_build_version() {
     );
 }
 
+#[test]
+fn cli_tree_lists_ordered_compendiums_stories_and_optional_art_ids() {
+    let directory = package_project();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+
+    let tree = Command::new(binary)
+        .args(["--root", directory.path().to_str().unwrap(), "tree"])
+        .output()
+        .unwrap();
+    assert!(tree.status.success());
+    assert_eq!(
+        String::from_utf8(tree.stdout).unwrap(),
+        concat!(
+            "compendiums\n",
+            "└── Magic [magic]\n",
+            "    ├── First [first]\n",
+            "    └── Second [second]\n",
+        )
+    );
+
+    let tree_with_art = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "tree",
+            "--art",
+        ])
+        .output()
+        .unwrap();
+    assert!(tree_with_art.status.success());
+    assert_eq!(
+        String::from_utf8(tree_with_art.stdout).unwrap(),
+        concat!(
+            "compendiums\n",
+            "└── Magic [magic]\n",
+            "    ├── First [first]\n",
+            "    │   └── art: first-opener\n",
+            "    └── Second [second]\n",
+            "        └── art: second-opener\n",
+        )
+    );
+
+    let json = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "tree",
+            "--art",
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let output: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(output["command"], "tree");
+    assert_eq!(
+        output["data"]["compendiums"][0]["stories"][0]["art_ids"],
+        serde_json::json!(["first-opener"])
+    );
+}
+
 fn project() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("compositor.toml"), DEFAULT_CONFIG).unwrap();
@@ -390,9 +452,9 @@ fn art_layout_controls_surface_and_requirement_geometry() {
     )
     .unwrap();
     let page_geometry = page.geometry.unwrap();
-    assert_eq!(page_geometry.width_px, 1560);
+    assert_eq!(page_geometry.width_px, 1200);
     assert_eq!(page_geometry.height_px, 1500);
-    assert!((page_geometry.aspect_ratio - (5.2 / 5.0)).abs() < 0.0001);
+    assert!((page_geometry.aspect_ratio - 0.8).abs() < 0.0001);
 
     let spread: IllustrationRequirement = storage::read_json(
         &directory
@@ -403,6 +465,16 @@ fn art_layout_controls_surface_and_requirement_geometry() {
     let spread_geometry = spread.geometry.unwrap();
     assert_eq!(spread_geometry.width_px, 4800);
     assert_eq!(spread_geometry.height_px, 1500);
+
+    let mut changed_config = config.clone();
+    changed_config.book.trim_width_in = 7.0;
+    build::build(directory.path(), &changed_config, None).unwrap();
+    let revised_page =
+        storage::load_latest_requirement(directory.path(), &changed_config, "page-art")
+            .unwrap()
+            .unwrap();
+    assert_eq!(revised_page.revision, 2);
+    assert_eq!(revised_page.geometry.unwrap().width_px, 1050);
 }
 
 #[test]

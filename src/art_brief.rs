@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::discovery::discover;
-use crate::model::{Severity, ValidationIssue, ValidationReport};
+use crate::model::{ArtGeometry, Severity, ValidationIssue, ValidationReport};
 use crate::AppError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -100,6 +100,36 @@ pub struct ArtBriefInspection {
     pub path: String,
     pub brief: Option<ArtBrief>,
     pub validation: ValidationReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CandidateGeometry {
+    pub width_px: u32,
+    pub height_px: u32,
+    pub aspect_ratio: f64,
+}
+
+pub fn candidate_geometry(path: &Path) -> Result<CandidateGeometry, String> {
+    let (width_px, height_px) = image::image_dimensions(path).map_err(|error| error.to_string())?;
+    if width_px == 0 || height_px == 0 {
+        return Err("image dimensions must be non-zero".into());
+    }
+    Ok(CandidateGeometry {
+        width_px,
+        height_px,
+        aspect_ratio: f64::from(width_px) / f64::from(height_px),
+    })
+}
+
+/// Accept exact geometry within two source pixels of rounding. Wide landscape
+/// frames may also use a cover-crop source between 2:1 and the frame ratio;
+/// layout keeps the destination frame fixed and crops the source to it.
+pub fn geometry_matches(expected: &ArtGeometry, actual: &CandidateGeometry) -> bool {
+    let tolerance = 2.0 / f64::from(actual.height_px);
+    (actual.aspect_ratio - expected.aspect_ratio).abs() <= tolerance
+        || (expected.aspect_ratio >= 2.0
+            && actual.aspect_ratio >= 2.0
+            && actual.aspect_ratio <= expected.aspect_ratio + tolerance)
 }
 
 pub fn directory(root: &Path) -> PathBuf {
@@ -275,6 +305,7 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
             Some(&brief.art_id),
         );
     }
+    let mut expected_geometry = None;
     match discover(root, config) {
         Ok(project) => match project
             .compendiums
@@ -282,19 +313,28 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
             .flat_map(|compendium| &compendium.stories)
             .find(|story| story.id == brief.source.story_id)
         {
-            Some(story)
-                if story.units.iter().any(|unit| {
-                    unit.directives.anchor.as_deref() == Some(&brief.source.anchor_id)
-                }) => {}
-            Some(_) => push(
-                &mut report,
-                Severity::Error,
-                "art_brief_anchor_missing",
-                "source.anchor_id does not exist in the named story".into(),
-                &brief_path,
-                Some(&brief.source.story_id),
-                Some(&brief.art_id),
-            ),
+            Some(story) => match story
+                .units
+                .iter()
+                .find(|unit| unit.directives.anchor.as_deref() == Some(&brief.source.anchor_id))
+            {
+                Some(unit) => {
+                    expected_geometry = unit
+                        .directives
+                        .art_layout
+                        .as_ref()
+                        .map(|layout| crate::art::geometry(config, layout));
+                }
+                None => push(
+                    &mut report,
+                    Severity::Error,
+                    "art_brief_anchor_missing",
+                    "source.anchor_id does not exist in the named story".into(),
+                    &brief_path,
+                    Some(&brief.source.story_id),
+                    Some(&brief.art_id),
+                ),
+            },
             None => push(
                 &mut report,
                 Severity::Error,
@@ -328,12 +368,15 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
                 Some(&brief.art_id),
             );
         }
-        validate_file(
+        let path = validate_file(
             &context,
             &candidate.file,
             FileRole::CandidateImage,
             &mut report,
         );
+        if let (Some(path), Some(expected)) = (path, expected_geometry.as_ref()) {
+            validate_candidate_geometry(&context, &candidate.file, &path, expected, &mut report);
+        }
     }
     for reference in &brief.context.canon_references {
         validate_file(&context, reference, FileRole::CanonReference, &mut report);
@@ -388,7 +431,7 @@ fn validate_file(
     value: &str,
     role: FileRole,
     report: &mut ValidationReport,
-) {
+) -> Option<PathBuf> {
     let kind = role.label();
     let candidate = Path::new(value);
     if candidate.is_absolute()
@@ -408,7 +451,7 @@ fn validate_file(
             Some(context.story_id),
             Some(context.art_id),
         );
-        return;
+        return None;
     }
     let path = context.root.join(candidate);
     if !path.is_file() {
@@ -421,7 +464,7 @@ fn validate_file(
             Some(context.story_id),
             Some(context.art_id),
         );
-        return;
+        return None;
     }
     if role.requires_image_format() {
         let extension = path
@@ -439,7 +482,48 @@ fn validate_file(
                 Some(context.story_id),
                 Some(context.art_id),
             );
+            return None;
         }
+    }
+    Some(path)
+}
+
+fn validate_candidate_geometry(
+    context: &BriefValidationContext<'_>,
+    value: &str,
+    path: &Path,
+    expected: &ArtGeometry,
+    report: &mut ValidationReport,
+) {
+    match candidate_geometry(path) {
+        Ok(actual) if geometry_matches(expected, &actual) => {}
+        Ok(actual) => push(
+            report,
+            Severity::Error,
+            "candidate_geometry_incompatible",
+            format!(
+                "candidate `{value}` is {}x{} ({:.6}:1); expected {:.6}:1 or a 2:1-to-{:.6}:1 cover-crop source for {}x{} geometry",
+                actual.width_px,
+                actual.height_px,
+                actual.aspect_ratio,
+                expected.aspect_ratio,
+                expected.aspect_ratio,
+                expected.width_px,
+                expected.height_px,
+            ),
+            context.brief_path,
+            Some(context.story_id),
+            Some(context.art_id),
+        ),
+        Err(error) => push(
+            report,
+            Severity::Error,
+            "candidate_geometry_unreadable",
+            format!("candidate `{value}` could not be read: {error}"),
+            context.brief_path,
+            Some(context.story_id),
+            Some(context.art_id),
+        ),
     }
 }
 
@@ -491,7 +575,8 @@ pub fn relative(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtBrief, PageTreatment};
+    use super::{candidate_geometry, geometry_matches, ArtBrief, CandidateGeometry, PageTreatment};
+    use crate::model::ArtGeometry;
 
     const BRIEF: &str = r#"
 schema_version: 2
@@ -547,5 +632,64 @@ generation:
         )
         .is_err());
         assert!(serde_yaml::from_str::<ArtBrief>(&BRIEF.replace("floating", "bordered")).is_err());
+    }
+
+    #[test]
+    fn accepts_exact_and_cover_crop_geometry_sources() {
+        let expected = ArtGeometry {
+            surface_width_in: 16.0,
+            width_in: 16.0,
+            height_in: 5.5,
+            aspect_ratio: 16.0 / 5.5,
+            width_px: 4800,
+            height_px: 1650,
+        };
+        let rounded_match = CandidateGeometry {
+            width_px: 2138,
+            height_px: 735,
+            aspect_ratio: 2138.0 / 735.0,
+        };
+        let near_exact_portrait_match = CandidateGeometry {
+            width_px: 905,
+            height_px: 1738,
+            aspect_ratio: 905.0 / 1738.0,
+        };
+        let mismatch = CandidateGeometry {
+            width_px: 1735,
+            height_px: 906,
+            aspect_ratio: 1735.0 / 906.0,
+        };
+        let cover_crop = CandidateGeometry {
+            width_px: 1983,
+            height_px: 793,
+            aspect_ratio: 1983.0 / 793.0,
+        };
+        assert!(geometry_matches(&expected, &rounded_match));
+        assert!(!geometry_matches(&expected, &mismatch));
+        assert!(geometry_matches(&expected, &cover_crop));
+
+        let portrait_expected = ArtGeometry {
+            surface_width_in: 8.0,
+            width_in: 5.2,
+            height_in: 10.0,
+            aspect_ratio: 0.52,
+            width_px: 1560,
+            height_px: 3000,
+        };
+        assert!(geometry_matches(
+            &portrait_expected,
+            &near_exact_portrait_match
+        ));
+    }
+
+    #[test]
+    fn reads_candidate_pixels_and_rejects_corrupt_images() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("candidate.png");
+        image::RgbaImage::new(2138, 735).save(&valid).unwrap();
+        assert_eq!(candidate_geometry(&valid).unwrap().width_px, 2138);
+        let corrupt = directory.path().join("corrupt.png");
+        std::fs::write(&corrupt, "not an image").unwrap();
+        assert!(candidate_geometry(&corrupt).is_err());
     }
 }

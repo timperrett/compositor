@@ -3,7 +3,7 @@ use crate::build;
 use crate::config::{Config, DEFAULT_CONFIG};
 use crate::discovery::discover;
 use crate::flow;
-use crate::model::{ChangeSet, ValidationReport};
+use crate::model::{ChangeSet, SourceProject, ValidationReport};
 use crate::proof;
 use crate::report::{self, OutputFormat};
 use crate::storage;
@@ -12,6 +12,7 @@ use crate::{assets, composition, overrides, package};
 use crate::{project_root, AppError};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,6 +53,12 @@ enum Command {
         story: Option<String>,
         #[arg(long)]
         strict: bool,
+    },
+    /// Display compendiums, stories, and optionally their art IDs as a tree.
+    Tree {
+        /// Include art IDs from story-linked art briefs.
+        #[arg(long)]
+        art: bool,
     },
     Status,
     Build {
@@ -181,6 +188,14 @@ enum ArtCommand {
     },
     Register {
         art_id: String,
+    },
+    IngestCandidate {
+        art_id: String,
+        source: PathBuf,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        attempt: u32,
     },
     Select {
         art_id: String,
@@ -312,6 +327,10 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             } else {
                 Err(AppError::Validation)
             }
+        }
+        Command::Tree { art } => {
+            let project = discover(root, &config)?;
+            tree_command(root, &project, art, format)
         }
         Command::Status => {
             let prepared = build::prepare(root, &config)?;
@@ -452,6 +471,139 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
         Command::Init { .. } => Err(AppError::command(
             "init is handled before configuration is loaded".into(),
         )),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct TreeOutput {
+    compendiums: Vec<TreeCompendium>,
+}
+
+#[derive(Debug, Serialize)]
+struct TreeCompendium {
+    id: String,
+    title: String,
+    stories: Vec<TreeStory>,
+}
+
+#[derive(Debug, Serialize)]
+struct TreeStory {
+    id: String,
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    art_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug)]
+struct TreeNode {
+    label: String,
+    children: Vec<TreeNode>,
+}
+
+fn tree_command(
+    root: &Path,
+    project: &SourceProject,
+    include_art: bool,
+    format: OutputFormat,
+) -> Result<(), AppError> {
+    let art_by_story = if include_art {
+        art_ids_by_story(root)?
+    } else {
+        BTreeMap::new()
+    };
+    let output = TreeOutput {
+        compendiums: project
+            .compendiums
+            .iter()
+            .map(|compendium| TreeCompendium {
+                id: compendium.id.clone(),
+                title: compendium.title.clone(),
+                stories: compendium
+                    .stories
+                    .iter()
+                    .map(|story| TreeStory {
+                        id: story.id.clone(),
+                        title: story.title.clone(),
+                        art_ids: include_art
+                            .then(|| art_by_story.get(&story.id).cloned().unwrap_or_default()),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+
+    match format {
+        OutputFormat::Human => {
+            print!("{}", render_tree(&output));
+            Ok(())
+        }
+        OutputFormat::Json => print_report(format, "tree", output, ValidationReport::default()),
+    }
+}
+
+fn art_ids_by_story(root: &Path) -> Result<BTreeMap<String, Vec<String>>, AppError> {
+    let mut art_by_story = BTreeMap::<String, Vec<String>>::new();
+    for id in art_brief::ids(root)? {
+        let Some(brief) = art_brief::load(root, &id)? else {
+            continue;
+        };
+        art_by_story
+            .entry(brief.source.story_id)
+            .or_default()
+            .push(brief.art_id);
+    }
+    for art_ids in art_by_story.values_mut() {
+        art_ids.sort();
+    }
+    Ok(art_by_story)
+}
+
+fn render_tree(output: &TreeOutput) -> String {
+    let root = TreeNode {
+        label: "compendiums".into(),
+        children: output
+            .compendiums
+            .iter()
+            .map(|compendium| TreeNode {
+                label: format!("{} [{}]", compendium.title, compendium.id),
+                children: compendium
+                    .stories
+                    .iter()
+                    .map(|story| TreeNode {
+                        label: format!("{} [{}]", story.title, story.id),
+                        children: story
+                            .art_ids
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|id| TreeNode {
+                                label: format!("art: {id}"),
+                                children: Vec::new(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let mut rendered = format!("{}\n", root.label);
+    append_tree_children(&mut rendered, "", &root.children);
+    rendered
+}
+
+fn append_tree_children(rendered: &mut String, prefix: &str, children: &[TreeNode]) {
+    for (index, child) in children.iter().enumerate() {
+        let is_last = index + 1 == children.len();
+        rendered.push_str(prefix);
+        rendered.push_str(if is_last { "└── " } else { "├── " });
+        rendered.push_str(&child.label);
+        rendered.push('\n');
+        let child_prefix = if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}│   ")
+        };
+        append_tree_children(rendered, &child_prefix, &child.children);
     }
 }
 
@@ -961,6 +1113,7 @@ fn build_conventional_packages(
         validation.issues.extend(
             build_package(
                 root,
+                config,
                 &story_path,
                 &flow_path,
                 &composition_path,
@@ -1016,6 +1169,7 @@ fn next_package_revision(output_directory: &Path, compendium_id: &str) -> Result
 #[allow(clippy::too_many_arguments)]
 fn build_package(
     project_root: &Path,
+    config: &Config,
     story_path: &Path,
     flow_path: &Path,
     composition_path: &Path,
@@ -1053,6 +1207,7 @@ fn build_package(
     };
     let validation = package::build(
         project_root,
+        config,
         &story,
         &flow_plan,
         &composition_plan,

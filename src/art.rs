@@ -36,6 +36,12 @@ pub fn sync_requirements(
             .find(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
             .map(|assignment| assignment.layout)
             .unwrap_or(PageLayout::TextDominant);
+        let geometry = if let Some(art_layout) = unit.directives.art_layout.as_ref() {
+            validate_layout(config, art_layout).map_err(AppError::command)?;
+            Some(geometry(config, art_layout))
+        } else {
+            None
+        };
         let previous = storage::load_latest_requirement(root, config, id)?;
         if let Some(previous) = previous.as_ref() {
             if previous.story_id == story.id
@@ -44,6 +50,7 @@ pub fn sync_requirements(
                 && previous.layout == layout
                 && previous.art_note == unit.directives.art
                 && previous.art_layout == unit.directives.art_layout
+                && previous.geometry == geometry
             {
                 requirements.push(previous.clone());
                 continue;
@@ -63,11 +70,7 @@ pub fn sync_requirements(
             status: ArtifactStatus::NeedsReview,
             revision,
             art_layout: unit.directives.art_layout.clone(),
-            geometry: unit
-                .directives
-                .art_layout
-                .as_ref()
-                .map(|layout| geometry(config, layout)),
+            geometry,
             art_note: unit.directives.art.clone(),
         };
         storage::save_requirement(root, config, &record)?;
@@ -77,20 +80,6 @@ pub fn sync_requirements(
 }
 
 pub fn geometry(config: &Config, layout: &ArtLayout) -> ArtGeometry {
-    let envelope = match (&layout.surface, &layout.orientation) {
-        (ArtSurface::SinglePage, ArtOrientation::Portrait) => {
-            config.art_layout.single_page_portrait_width_fraction
-        }
-        (ArtSurface::SinglePage, ArtOrientation::Landscape) => {
-            config.art_layout.single_page_landscape_width_fraction
-        }
-        (ArtSurface::DoublePageSpread, ArtOrientation::Portrait) => {
-            config.art_layout.double_page_portrait_width_fraction
-        }
-        (ArtSurface::DoublePageSpread, ArtOrientation::Landscape) => {
-            config.art_layout.double_page_landscape_width_fraction
-        }
-    };
     let surface_width_in = match layout.surface {
         ArtSurface::SinglePage => config.book.trim_width_in,
         ArtSurface::DoublePageSpread => {
@@ -98,7 +87,12 @@ pub fn geometry(config: &Config, layout: &ArtLayout) -> ArtGeometry {
         }
     };
     let height_in = config.book.trim_height_in * f64::from(layout.height_percent) / 100.0;
-    let width_in = surface_width_in * envelope;
+    let portrait_aspect_ratio = config.book.trim_width_in.min(config.book.trim_height_in)
+        / config.book.trim_width_in.max(config.book.trim_height_in);
+    let width_in = match layout.orientation {
+        ArtOrientation::Portrait => height_in * portrait_aspect_ratio,
+        ArtOrientation::Landscape => surface_width_in,
+    };
     let ppi = config.art_layout.pixels_per_inch;
     ArtGeometry {
         surface_width_in,
@@ -107,6 +101,36 @@ pub fn geometry(config: &Config, layout: &ArtLayout) -> ArtGeometry {
         aspect_ratio: width_in / height_in,
         width_px: (width_in * ppi).round() as u32,
         height_px: (height_in * ppi).round() as u32,
+    }
+}
+
+pub fn validate_layout(config: &Config, layout: &ArtLayout) -> Result<(), String> {
+    let geometry = geometry(config, layout);
+    match layout.orientation {
+        ArtOrientation::Portrait if geometry.aspect_ratio >= 1.0 => Err(format!(
+            "portrait art-layout derives {:.3}:1; portrait trim geometry must derive below 1:1",
+            geometry.aspect_ratio
+        )),
+        ArtOrientation::Landscape
+            if geometry.aspect_ratio < config.art_layout.minimum_landscape_aspect_ratio =>
+        {
+            let maximum_height_percent = ((geometry.surface_width_in
+                / (config.book.trim_height_in * config.art_layout.minimum_landscape_aspect_ratio))
+                * 100.0)
+                .floor()
+                .clamp(0.0, 100.0) as u8;
+            Err(format!(
+                "landscape art-layout at height={}%, on this {} surface, derives {:.3}:1; use height at most {}% or choose portrait",
+                layout.height_percent,
+                match layout.surface {
+                    ArtSurface::SinglePage => "single-page",
+                    ArtSurface::DoublePageSpread => "double-page-spread",
+                },
+                geometry.aspect_ratio,
+                maximum_height_percent,
+            ))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -137,37 +161,50 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn computes_each_layout_envelope_and_spread_gutter() {
+    fn derives_real_portrait_and_full_width_landscape_geometry() {
         let mut config = Config::default();
         config.book.trim_width_in = 8.0;
         config.book.trim_height_in = 10.0;
         config.art_layout.spread_gutter_in = 0.5;
-        let cases = [
-            (ArtSurface::SinglePage, ArtOrientation::Portrait, 5.2),
-            (ArtSurface::SinglePage, ArtOrientation::Landscape, 8.0),
-            (
-                ArtSurface::DoublePageSpread,
-                ArtOrientation::Portrait,
-                6.975,
-            ),
-            (
-                ArtSurface::DoublePageSpread,
-                ArtOrientation::Landscape,
-                15.5,
-            ),
-        ];
-        for (surface, orientation, expected_width) in cases {
-            let layout = ArtLayout {
-                surface,
-                orientation,
-                height_percent: 50,
-            };
-            let result = geometry(&config, &layout);
-            assert!((result.width_in - expected_width).abs() < 0.0001);
-            assert_eq!(result.height_in, 5.0);
-            assert_eq!(result.width_px, (expected_width * 300.0).round() as u32);
-            assert_eq!(result.height_px, 1500);
-            assert!((result.aspect_ratio - expected_width / 5.0).abs() < 0.0001);
-        }
+        let portrait = geometry(
+            &config,
+            &ArtLayout {
+                surface: ArtSurface::SinglePage,
+                orientation: ArtOrientation::Portrait,
+                height_percent: 100,
+            },
+        );
+        assert_eq!(portrait.width_in, 8.0);
+        assert_eq!(portrait.height_in, 10.0);
+        assert_eq!(portrait.width_px, 2400);
+        assert_eq!(portrait.height_px, 3000);
+        assert!((portrait.aspect_ratio - 0.8).abs() < 0.0001);
+
+        let spread = geometry(
+            &config,
+            &ArtLayout {
+                surface: ArtSurface::DoublePageSpread,
+                orientation: ArtOrientation::Landscape,
+                height_percent: 55,
+            },
+        );
+        assert_eq!(spread.width_in, 15.5);
+        assert_eq!(spread.height_in, 5.5);
+        assert!((spread.aspect_ratio - (15.5 / 5.5)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn rejects_landscape_that_is_not_landscape_enough() {
+        let config = Config::default();
+        let error = validate_layout(
+            &config,
+            &ArtLayout {
+                surface: ArtSurface::SinglePage,
+                orientation: ArtOrientation::Landscape,
+                height_percent: 100,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("height at most 60%"));
     }
 }

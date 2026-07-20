@@ -1,8 +1,9 @@
 use crate::art_brief::{self, ArtUsage};
 use crate::assets::{self, AssetRegistry, AssetStatus};
 use crate::composition::{ArtReference, CompositionPlan};
+use crate::config::Config;
 use crate::flow::{SourceRef, StoryFlowPlan};
-use crate::model::{Severity, Story, ValidationIssue, ValidationReport};
+use crate::model::{ArtGeometry, ArtLayout, Severity, Story, ValidationIssue, ValidationReport};
 use crate::AppError;
 use serde::Serialize;
 use std::fs;
@@ -15,6 +16,8 @@ pub struct PackagePolicy {
 }
 
 struct AssetResolution<'a> {
+    story: &'a Story,
+    config: &'a Config,
     expected_usage: ArtUsage,
     expected_spread_id: Option<&'a str>,
     destination: &'a Path,
@@ -47,6 +50,10 @@ struct ArtManifest {
     source: Option<String>,
     file: Option<String>,
     resolved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    art_layout: Option<ArtLayout>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<ArtGeometry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,8 +64,10 @@ struct OpenerManifest<'a> {
     art: ArtManifest,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     root: &Path,
+    config: &Config,
     story: &Story,
     flow: &StoryFlowPlan,
     composition: &CompositionPlan,
@@ -87,6 +96,8 @@ pub fn build(
         registry,
         &composition.opener.art,
         AssetResolution {
+            story,
+            config,
             expected_usage: ArtUsage::Opener,
             expected_spread_id: None,
             destination: &opener_directory,
@@ -151,6 +162,8 @@ pub fn build(
                     registry,
                     asset,
                     AssetResolution {
+                        story,
+                        config,
                         expected_usage: ArtUsage::Story,
                         expected_spread_id: Some(&flow_spread.id),
                         destination: &spread_directory,
@@ -161,7 +174,7 @@ pub fn build(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let manifest = SpreadManifest {
-            schema: "compositor.dev/resolved-spread/v1",
+            schema: "compositor.dev/resolved-spread/v2",
             id: &flow_spread.id,
             number: index + 1,
             role: &flow_spread.role,
@@ -324,6 +337,8 @@ fn resolve_asset(
         .unwrap_or("bin");
     let file = format!("art/{}.{}", asset.id, extension);
     fs::copy(&source_path, resolution.destination.join(&file))?;
+    let (art_layout, geometry) =
+        source_geometry(resolution.story, &brief.source.anchor_id, resolution.config)?;
     Ok(ArtManifest {
         id: asset.id.clone(),
         role: asset.role.clone(),
@@ -331,6 +346,8 @@ fn resolve_asset(
         source: Some(source.into()),
         file: Some(file),
         resolved: true,
+        art_layout,
+        geometry,
     })
 }
 
@@ -355,7 +372,28 @@ fn unresolved(
         source: None,
         file: None,
         resolved: false,
+        art_layout: None,
+        geometry: None,
     }
+}
+
+fn source_geometry(
+    story: &Story,
+    anchor_id: &str,
+    config: &Config,
+) -> Result<(Option<ArtLayout>, Option<ArtGeometry>), AppError> {
+    let art_layout = story
+        .units
+        .iter()
+        .find(|unit| unit.directives.anchor.as_deref() == Some(anchor_id))
+        .and_then(|unit| unit.directives.art_layout.clone());
+    let geometry = if let Some(layout) = art_layout.as_ref() {
+        crate::art::validate_layout(config, layout).map_err(AppError::command)?;
+        Some(crate::art::geometry(config, layout))
+    } else {
+        None
+    };
+    Ok((art_layout, geometry))
 }
 
 #[cfg(test)]
@@ -388,6 +426,7 @@ mod tests {
 
         build(
             directory.path(),
+            &Config::default(),
             &story,
             &flow_plan,
             &composition,
@@ -421,6 +460,13 @@ mod tests {
     fn leaves_unlinked_story_art_unresolved() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        let story_path = directory.path().join("story.md");
+        fs::write(
+            &story_path,
+            "---\nid: story\ntitle: Story\n---\n<!-- anchor: scene -->\n<!-- paragraph: opening -->\n\nOnce upon a time.\n",
+        )
+        .unwrap();
+        let story = flow::load_story(&story_path).unwrap();
         fs::write(
             directory.path().join("art/briefs/story-art.yaml"),
             "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
@@ -445,6 +491,8 @@ mod tests {
                 role: "primary-subject".into(),
             },
             AssetResolution {
+                story: &story,
+                config: &Config::default(),
                 expected_usage: ArtUsage::Story,
                 expected_spread_id: Some("spread-001"),
                 destination: directory.path(),
@@ -461,5 +509,73 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "ART_SPREAD_LINK_MISSING"));
+    }
+
+    #[test]
+    fn emits_source_derived_geometry_for_layout_controlled_art() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::create_dir_all(directory.path().join("assets/drafts")).unwrap();
+        let story_path = directory.path().join("story.md");
+        fs::write(
+            &story_path,
+            "---\nid: story\ntitle: Story\n---\n<!-- anchor: scene -->\n<!-- art-layout: surface=double-page-spread orientation=landscape height=25% -->\n<!-- paragraph: opening -->\n\nOnce upon a time.\n",
+        )
+        .unwrap();
+        let story = flow::load_story(&story_path).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/story-art.yaml"),
+            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: framed, prompt: A scene. }\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("assets/drafts/story-art.png"),
+            "placeholder",
+        )
+        .unwrap();
+        let registry = AssetRegistry {
+            schema: crate::assets::ASSET_REGISTRY_SCHEMA.into(),
+            assets: vec![AssetRecord {
+                id: "story-art".into(),
+                brief: "art/briefs/story-art.yaml".into(),
+                status: AssetStatus::Draft,
+                file: Some("assets/drafts/story-art.png".into()),
+                superseded_by: None,
+            }],
+        };
+        let flow_plan: StoryFlowPlan = serde_yaml::from_str(&format!(
+            "schema: compositor.dev/story-flow/v1\nstory:\n  id: story\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: opening }}\n      through: {{ type: paragraph, id: opening }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n",
+            story.source_hash
+        ))
+        .unwrap();
+        let composition: CompositionPlan = serde_yaml::from_str(
+            "schema: compositor.dev/composition-plan/v2\nstory:\n  id: story\n  flow: story.flow.yaml\nedition:\n  id: first-edition\n  design_system: example\nopener:\n  title: Story\n  placement: center-page\n  art: { id: story-opener, role: primary-subject }\nspreads:\n  - id: spread-001\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n    art_assets: [{ id: story-art, role: primary-subject }]\n",
+        )
+        .unwrap();
+        let output = directory.path().join("package");
+
+        build(
+            directory.path(),
+            &Config::default(),
+            &story,
+            &flow_plan,
+            &composition,
+            &registry,
+            &output,
+            PackagePolicy {
+                minimum: AssetStatus::Draft,
+                strict: false,
+            },
+        )
+        .unwrap();
+
+        let manifest = fs::read_to_string(output.join("spreads/001-opening/spread.yaml")).unwrap();
+        assert!(manifest.contains("schema: compositor.dev/resolved-spread/v2"));
+        assert!(manifest.contains("height_percent: 25"));
+        assert!(manifest.contains("width_in: 16.0"));
+        assert!(manifest.contains("height_in: 2.5"));
+        assert!(manifest.contains("aspect_ratio: 6.4"));
+        assert!(manifest.contains("width_px: 4800"));
+        assert!(manifest.contains("height_px: 750"));
     }
 }

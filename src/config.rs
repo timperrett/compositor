@@ -75,10 +75,9 @@ pub struct BookConfig {
 pub struct ArtLayoutConfig {
     pub pixels_per_inch: f64,
     pub spread_gutter_in: f64,
-    pub single_page_portrait_width_fraction: f64,
-    pub single_page_landscape_width_fraction: f64,
-    pub double_page_portrait_width_fraction: f64,
-    pub double_page_landscape_width_fraction: f64,
+    /// The smallest allowed derived aspect ratio for a landscape frame.
+    /// Authors select only `orientation`; this is a project-level policy.
+    pub minimum_landscape_aspect_ratio: f64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -184,10 +183,7 @@ impl Default for ArtLayoutConfig {
         Self {
             pixels_per_inch: 300.0,
             spread_gutter_in: 0.0,
-            single_page_portrait_width_fraction: 0.65,
-            single_page_landscape_width_fraction: 1.0,
-            double_page_portrait_width_fraction: 0.45,
-            double_page_landscape_width_fraction: 1.0,
+            minimum_landscape_aspect_ratio: 4.0 / 3.0,
         }
     }
 }
@@ -244,17 +240,10 @@ impl Config {
         }
         if self.art_layout.pixels_per_inch <= 0.0
             || self.art_layout.spread_gutter_in < 0.0
-            || [
-                self.art_layout.single_page_portrait_width_fraction,
-                self.art_layout.single_page_landscape_width_fraction,
-                self.art_layout.double_page_portrait_width_fraction,
-                self.art_layout.double_page_landscape_width_fraction,
-            ]
-            .into_iter()
-            .any(|fraction| fraction <= 0.0 || fraction > 1.0)
+            || self.art_layout.minimum_landscape_aspect_ratio <= 1.0
         {
             return Err(AppError::config(
-                "art_layout dimensions and width envelopes must be positive; width envelopes must not exceed 1".into(),
+                "art_layout pixels per inch must be positive, the spread gutter must not be negative, and the minimum landscape aspect ratio must be greater than 1".into(),
             ));
         }
         Ok(())
@@ -266,10 +255,11 @@ impl Config {
     pub fn pagination_fingerprint(&self) -> String {
         let pagination = &self.pagination;
         let input = format!(
-            "pagination-v4\ntarget={}\nmaximum={}\nrecto={}\nart-layout={:?}",
+            "pagination-v5\ntarget={}\nmaximum={}\nrecto={}\nbook={:?}\nart-layout={:?}",
             pagination.target_words_per_text_page,
             pagination.maximum_words_per_text_page,
             pagination.story_starts_on_recto,
+            self.book,
             self.art_layout,
         );
         format!("sha256:{:x}", Sha256::digest(input.as_bytes()))
@@ -320,10 +310,7 @@ bleed_in = 0.125
 [art_layout]
 pixels_per_inch = 300.0
 spread_gutter_in = 0.0
-single_page_portrait_width_fraction = 0.65
-single_page_landscape_width_fraction = 1.0
-double_page_portrait_width_fraction = 0.45
-double_page_landscape_width_fraction = 1.0
+minimum_landscape_aspect_ratio = 1.3333333333333333
 
 [pagination]
 target_words_per_text_page = 90

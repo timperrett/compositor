@@ -105,6 +105,26 @@ pub fn validate_state(
     manifest: Option<&Manifest>,
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
+    for compendium in &project.compendiums {
+        for story in &compendium.stories {
+            for unit in &story.units {
+                let Some(layout) = unit.directives.art_layout.as_ref() else {
+                    continue;
+                };
+                if let Err(message) = crate::art::validate_layout(config, layout) {
+                    issue(
+                        &mut report,
+                        Severity::Error,
+                        "invalid_art_layout_geometry",
+                        message,
+                        &story.source,
+                        Some(&story.id),
+                        unit.directives.anchor.as_deref(),
+                    );
+                }
+            }
+        }
+    }
     let Some(manifest) = manifest else {
         issue(
             &mut report,

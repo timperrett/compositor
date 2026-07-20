@@ -1,9 +1,10 @@
 use super::*;
-use crate::art_brief::ArtUsage;
+use crate::art_brief::{ArtCandidate, ArtUsage, CandidateGeometry};
 use crate::assets::{AssetRecord, AssetRegistry, AssetStatus};
 use crate::composition::{ArtReference, IllustrationIntent};
 use crate::flow::{SourceRange, StoryFlowPlan};
 use crate::model::Story;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -22,6 +23,38 @@ struct ArtListItem {
     candidate_count: usize,
     selected_candidate: Option<String>,
     approved_artwork: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CandidateIngestOutput {
+    art_id: String,
+    revision: String,
+    attempt: u32,
+    accepted: bool,
+    expected_geometry: crate::model::ArtGeometry,
+    actual_geometry: CandidateGeometry,
+    file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderAttempts {
+    schema: String,
+    art_id: String,
+    requirement_revision: u64,
+    expected_geometry: crate::model::ArtGeometry,
+    #[serde(default)]
+    attempts: Vec<RenderAttempt>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderAttempt {
+    attempt: u32,
+    file: String,
+    status: String,
+    reason: String,
+    actual_geometry: CandidateGeometry,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +117,12 @@ pub(super) fn art_command(
         ArtCommand::MigrateBriefs { write } => migrate_briefs(root, format, write),
         ArtCommand::Registry { write } => migrate_registry(root, format, write),
         ArtCommand::Register { art_id } => register_asset(root, config, format, &art_id),
+        ArtCommand::IngestCandidate {
+            art_id,
+            source,
+            revision,
+            attempt,
+        } => ingest_candidate(root, config, format, &art_id, &source, &revision, attempt),
         ArtCommand::Select {
             art_id,
             candidate_id,
@@ -290,6 +329,166 @@ pub(super) fn art_command(
             print_report(format, "art attach", relative, ValidationReport::default())
         }
     }
+}
+
+fn ingest_candidate(
+    root: &Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+    source: &Path,
+    revision: &str,
+    attempt: u32,
+) -> Result<(), AppError> {
+    if !valid_revision(revision) || !(1..=3).contains(&attempt) {
+        return Err(AppError::command(
+            "revision must use rNN format and attempt must be between 1 and 3".into(),
+        ));
+    }
+    if !source.is_file() {
+        return Err(AppError::command(format!(
+            "candidate source does not exist: {}",
+            source.display()
+        )));
+    }
+    let requirement = required_art_requirement(root, config, art_id)?;
+    let expected_geometry = requirement
+        .geometry
+        .clone()
+        .ok_or_else(|| AppError::command(format!("art `{art_id}` has no computed geometry")))?;
+    let actual_geometry = art_brief::candidate_geometry(source)
+        .map_err(|error| AppError::command(format!("candidate source is unreadable: {error}")))?;
+    let extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .ok_or_else(|| {
+            AppError::command("candidate source must be PNG, JPG, JPEG, or WebP".into())
+        })?;
+    let revision_dir = root.join("assets/drafts").join(art_id).join(revision);
+    if art_brief::geometry_matches(&expected_geometry, &actual_geometry) {
+        let mut brief = art_brief::load(root, art_id)?
+            .ok_or_else(|| AppError::command(format!("no art brief exists for `{art_id}`")))?;
+        let candidate_id = next_candidate_id(&brief.candidates)?;
+        let file =
+            format!("assets/drafts/{art_id}/{revision}/candidate-{candidate_id}.{extension}");
+        let destination = root.join(&file);
+        if destination.exists() {
+            return Err(AppError::command(format!(
+                "candidate destination already exists: {}",
+                destination.display()
+            )));
+        }
+        fs::create_dir_all(&revision_dir)?;
+        fs::copy(source, &destination)?;
+        brief.candidates.push(ArtCandidate {
+            id: candidate_id,
+            file: file.clone(),
+            prompt: None,
+        });
+        if !art_brief::validate(root, config, &brief).can_proceed() {
+            fs::remove_file(&destination)?;
+            return Err(AppError::Validation);
+        }
+        art_brief::save(root, &brief)?;
+        print_report(
+            format,
+            "art ingest-candidate",
+            CandidateIngestOutput {
+                art_id: art_id.into(),
+                revision: revision.into(),
+                attempt,
+                accepted: true,
+                expected_geometry,
+                actual_geometry,
+                file,
+            },
+            ValidationReport::default(),
+        )
+    } else {
+        let rejected = revision_dir.join("rejected");
+        let filename = format!("attempt-{attempt}.{extension}");
+        let destination = rejected.join(&filename);
+        if destination.exists() {
+            return Err(AppError::command(format!(
+                "rejected destination already exists: {}",
+                destination.display()
+            )));
+        }
+        fs::create_dir_all(&rejected)?;
+        fs::copy(source, &destination)?;
+        let log_path = revision_dir.join("render-attempts.yaml");
+        let mut log = if log_path.is_file() {
+            serde_yaml::from_str::<RenderAttempts>(&fs::read_to_string(&log_path)?).map_err(
+                |error| AppError::serialization(format!("{}: {error}", log_path.display())),
+            )?
+        } else {
+            RenderAttempts {
+                schema: "compositor.dev/render-attempts/v1".into(),
+                art_id: art_id.into(),
+                requirement_revision: requirement.revision,
+                expected_geometry: expected_geometry.clone(),
+                attempts: Vec::new(),
+            }
+        };
+        if log.art_id != art_id
+            || log.requirement_revision != requirement.revision
+            || log.expected_geometry != expected_geometry
+            || log.attempts.iter().any(|entry| entry.attempt == attempt)
+        {
+            return Err(AppError::command(
+                "render attempt metadata conflicts with this request".into(),
+            ));
+        }
+        let file = relative_path(root, &destination);
+        log.attempts.push(RenderAttempt {
+            attempt,
+            file: file.clone(),
+            status: "rejected".into(),
+            reason: "aspect-ratio-incompatible".into(),
+            actual_geometry: actual_geometry.clone(),
+        });
+        storage::write_text_atomic(
+            &log_path,
+            &serde_yaml::to_string(&log)
+                .map_err(|error| AppError::serialization(error.to_string()))?,
+        )?;
+        print_report(
+            format,
+            "art ingest-candidate",
+            CandidateIngestOutput {
+                art_id: art_id.into(),
+                revision: revision.into(),
+                attempt,
+                accepted: false,
+                expected_geometry,
+                actual_geometry,
+                file,
+            },
+            ValidationReport::default(),
+        )
+    }
+}
+
+fn valid_revision(value: &str) -> bool {
+    value.len() >= 3
+        && value.starts_with('r')
+        && value[1..]
+            .chars()
+            .all(|character| character.is_ascii_digit())
+}
+
+fn next_candidate_id(candidates: &[ArtCandidate]) -> Result<String, AppError> {
+    for letter in b'a'..=b'z' {
+        let candidate = char::from(letter).to_string();
+        if !candidates.iter().any(|existing| existing.id == candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::command(
+        "candidate IDs a through z are exhausted; create a new art brief".into(),
+    ))
 }
 
 fn art_coverage(
