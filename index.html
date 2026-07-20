@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Compositor is a deterministic, Markdown-first production layer for story manuscripts."
+    />
+    <title>Compositor — Markdown-first book production</title>
+    <link rel="stylesheet" href="assets/styles.css" />
+    <script type="module" src="assets/main.js"></script>
+  </head>
+  <body class="font-sans antialiased">
+    <a
+      class="sr-only fixed left-4 top-4 z-[100] bg-ink px-4 py-3 text-sm font-bold text-paper focus:not-sr-only"
+      href="#main-content"
+    >
+      Skip to content
+    </a>
+
+    <header class="sticky top-0 z-50 border-b border-line bg-paper/95 backdrop-blur-sm">
+      <div class="shell flex min-h-16 items-center justify-between gap-5">
+        <a class="font-display text-[1.45rem] leading-none tracking-tight" href="#top" aria-label="Compositor home">Compositor</a>
+        <nav class="hidden items-center gap-5 lg:flex" aria-label="Primary navigation">
+          <a class="nav-link" href="#what-it-does">What it does</a>
+          <a class="nav-link" href="#ai-workflow">AI skills</a>
+          <a class="nav-link" href="#workflow">Workflow</a>
+          <a class="nav-link" href="#artwork">Artwork records</a>
+          <a class="nav-link" href="#outputs">Outputs</a>
+          <a class="nav-link" href="#quick-start">Quick start</a>
+        </nav>
+        <button
+          class="grid h-10 w-10 place-items-center border border-line text-ink lg:hidden"
+          type="button"
+          aria-expanded="false"
+          aria-controls="mobile-menu"
+          data-menu-button
+        >
+          <span class="sr-only">Toggle navigation</span>
+          <span aria-hidden="true" class="text-lg leading-none">☰</span>
+        </button>
+      </div>
+      <nav id="mobile-menu" class="border-t border-line bg-paper lg:hidden" aria-label="Mobile navigation" data-menu hidden>
+        <div class="shell grid gap-1 py-4">
+          <a class="nav-link px-1 py-2" href="#what-it-does">What it does</a>
+          <a class="nav-link px-1 py-2" href="#ai-workflow">AI skills</a>
+          <a class="nav-link px-1 py-2" href="#workflow">Workflow</a>
+          <a class="nav-link px-1 py-2" href="#artwork">Artwork records</a>
+          <a class="nav-link px-1 py-2" href="#outputs">Outputs</a>
+          <a class="nav-link px-1 py-2" href="#quick-start">Quick start</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section id="top" class="shell grid min-h-[calc(100svh-4rem)] items-center gap-12 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
+        <div class="max-w-2xl">
+          <p class="eyebrow">Human judgment. AI skills. Deterministic production.</p>
+          <h1 class="mt-6 font-display text-5xl leading-[0.98] tracking-[-0.035em] text-ink sm:text-6xl lg:text-7xl">
+            A dependable production layer for story manuscripts.
+          </h1>
+          <p class="mt-7 max-w-xl text-lg leading-8 text-[#4d504a]">
+            Authors own readable Markdown. AI skills can propose structured production decisions, while Compositor checks, records, and builds from them—so every handoff stays reviewable and repeatable.
+          </p>
+          <div class="mt-9 flex flex-wrap items-center gap-x-7 gap-y-4">
+            <a class="button-primary" href="#ai-workflow">See how the workflow works</a>
+            <a class="text-link" href="#quick-start">See the command line <span aria-hidden="true">↓</span></a>
+          </div>
+          <p class="mt-10 border-t border-line pt-4 text-xs leading-5 text-[#686961]">
+            Built for editorial teams and book makers who want source, decisions, and production handoff to remain legible.
+          </p>
+        </div>
+
+        <figure class="relative mx-auto w-full max-w-xl border border-line bg-[#fbf7ef]/65 p-5 shadow-paper sm:p-8" aria-labelledby="hero-diagram-caption">
+          <svg viewBox="0 0 640 440" class="h-auto w-full" role="img" aria-labelledby="hero-diagram-title hero-diagram-description">
+            <title id="hero-diagram-title">Human, skill, and Compositor handoff</title>
+            <desc id="hero-diagram-description">A manuscript passes through AI-skill plan proposals and Compositor validation to an approved production package.</desc>
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M72 74h147l27 27v211H72z" stroke-width="2" />
+              <path d="M219 74v29h27" stroke-width="2" />
+              <path d="M102 139h113M102 164h91M102 189h103M102 214h68M102 239h96" stroke="#58705d" stroke-width="3" />
+              <path d="M279 161h77M336 130l31 31-31 31" stroke="#a34e32" stroke-width="3" />
+              <rect x="381" y="86" width="149" height="150" rx="2" stroke-width="2" />
+              <path d="M408 123h95M408 153h69M408 183h85" stroke="#58705d" stroke-width="3" />
+              <path d="M408 210h38" stroke="#a34e32" stroke-width="3" />
+              <path d="M456 270v59M425 298l31 31 31-31" stroke="#a34e32" stroke-width="3" />
+              <path d="M336 357h178v-77l35 28v126H336z" stroke-width="2" />
+              <path d="M514 280v28h35" stroke-width="2" />
+              <path d="M365 390h79M365 411h125" stroke="#58705d" stroke-width="3" />
+              <circle cx="563" cy="390" r="14" stroke="#a34e32" stroke-width="3" />
+              <path d="m556 390 5 5 10-11" stroke="#a34e32" stroke-width="3" />
+            </g>
+            <g fill="#1f211e" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1.4">
+              <text x="72" y="48">HUMAN · MANUSCRIPT</text>
+              <text x="381" y="61">AI SKILLS · PLANS</text>
+              <text x="336" y="255">COMPOSITOR · HANDOFF</text>
+            </g>
+          </svg>
+          <figcaption id="hero-diagram-caption" class="mt-4 border-t border-line pt-3 text-xs leading-5 text-[#686961]">
+            Markdown moves through proposed plans and validation before delivery. The final editorial and layout decisions remain human work.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section id="what-it-does" class="border-y border-line bg-[#eee7da]/60 py-20 sm:py-24">
+        <div class="shell">
+          <p class="rule-label">What it does</p>
+          <div class="mt-9 grid gap-10 lg:grid-cols-[.86fr_1.14fr] lg:items-end">
+            <div>
+              <h2 class="font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">Keep authorship clean. Make production state accountable.</h2>
+            </div>
+            <p class="max-w-2xl text-lg leading-8 text-[#4d504a]">
+              Authors work in clean Markdown. Compositor derives and validates production metadata from that source, rather than turning generated state into something authors must maintain by hand.
+            </p>
+          </div>
+          <div class="mt-12 grid gap-px overflow-hidden border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
+            <article class="cap-card">
+              <p class="font-mono text-xs text-rust">01</p>
+              <h3 class="mt-7 font-display text-2xl">Durable source identity</h3>
+              <p class="mt-4 text-sm leading-6 text-[#565850]">Identify prose that persists across revision, so a changed manuscript can still be related to its earlier production context.</p>
+            </article>
+            <article class="cap-card">
+              <p class="font-mono text-xs text-rust">02</p>
+              <h3 class="mt-7 font-display text-2xl">Narrative flow and composition validation</h3>
+              <p class="mt-4 text-sm leading-6 text-[#565850]">Check the declared roles, pacing, and structural composition before the work reaches layout.</p>
+            </article>
+            <article class="cap-card">
+              <p class="font-mono text-xs text-rust">03</p>
+              <h3 class="mt-7 font-display text-2xl">Deterministic proofs and reports</h3>
+              <p class="mt-4 text-sm leading-6 text-[#565850]">Generate reviewable HTML proofs and machine-readable reports from the same approved source and plans.</p>
+            </article>
+            <article class="cap-card">
+              <p class="font-mono text-xs text-rust">04</p>
+              <h3 class="mt-7 font-display text-2xl">Layout-ready production packages</h3>
+              <p class="mt-4 text-sm leading-6 text-[#565850]">Prepare revisioned text and package artifacts for the next production stage, with their rationale nearby.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="ai-workflow" class="shell py-20 sm:py-28">
+        <p class="rule-label">Working with AI skills</p>
+        <div class="mt-9 grid gap-10 lg:grid-cols-[.9fr_1.1fr] lg:items-end">
+          <div>
+            <h2 class="font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">AI skills work inside a clear editorial contract.</h2>
+          </div>
+          <p class="max-w-2xl text-lg leading-8 text-[#4d504a]">
+            Compositor gives reusable skills a dependable project surface: readable Markdown, structured plans and records, and validation that makes the next action clear. It does not turn suggestions into silent changes.
+          </p>
+        </div>
+
+        <div class="mt-12 grid gap-px overflow-hidden border border-line bg-line md:grid-cols-3" aria-label="Responsibility matrix">
+          <article class="role-card">
+            <p class="font-mono text-xs text-rust">HUMAN JUDGMENT</p>
+            <h3 class="mt-5 font-display text-2xl">Own the story and approvals.</h3>
+            <p class="mt-4 text-sm leading-6 text-[#565850]">Write and revise prose, set editorial direction, assess candidate art, make selections and approvals, and control final layout.</p>
+          </article>
+          <article class="role-card">
+            <p class="font-mono text-xs text-rust">AI SKILLS</p>
+            <h3 class="mt-5 font-display text-2xl">Propose structured decisions.</h3>
+            <p class="mt-4 text-sm leading-6 text-[#565850]">Read Markdown and validated records; draft Flow Plans, Composition Plans, and art records; surface pacing, coverage, and visual-storytelling questions.</p>
+          </article>
+          <article class="role-card">
+            <p class="font-mono text-xs text-rust">COMPOSITOR</p>
+            <h3 class="mt-5 font-display text-2xl">Check and carry the handoff.</h3>
+            <p class="mt-4 text-sm leading-6 text-[#565850]">Parse source, preserve stable identity, validate plans and assets, report stale inputs, and build proofs and production packages.</p>
+          </article>
+        </div>
+
+        <div class="mt-10 grid gap-10 lg:grid-cols-[.82fr_1.18fr] lg:items-center">
+          <div class="space-y-4 text-base leading-7 text-[#4d504a]">
+            <p><strong class="text-ink">Skills use protocols, not hidden state.</strong> They work through readable source files and structured records rather than recreating internal production state.</p>
+            <p><strong class="text-ink">Suggestions remain reviewable.</strong> Ambiguous editorial, creative, and approval choices return to people.</p>
+            <p><strong class="text-ink">Validation is feedback.</strong> A failed check tells the person or skill what to address; it is never a reason to conceal or bypass the problem.</p>
+          </div>
+          <figure class="border border-line bg-[#fbf7ef]/65 p-6 sm:p-8" aria-labelledby="handoff-caption">
+            <div class="handoff-rail" aria-label="Artifact handoff">
+              <div class="handoff-node">
+                <span class="font-mono text-[0.66rem] text-rust">HUMAN</span>
+                <strong>Markdown<br />manuscript</strong>
+              </div>
+              <span class="handoff-arrow" aria-hidden="true">→</span>
+              <div class="handoff-node">
+                <span class="font-mono text-[0.66rem] text-rust">AI SKILLS</span>
+                <strong>Plans +<br />art records</strong>
+              </div>
+              <span class="handoff-arrow" aria-hidden="true">→</span>
+              <div class="handoff-node">
+                <span class="font-mono text-[0.66rem] text-rust">COMPOSITOR</span>
+                <strong>Validation<br />+ HTML proof</strong>
+              </div>
+              <span class="handoff-arrow" aria-hidden="true">→</span>
+              <div class="handoff-node">
+                <span class="font-mono text-[0.66rem] text-rust">HUMAN</span>
+                <strong>Approved<br />package</strong>
+              </div>
+            </div>
+            <figcaption id="handoff-caption" class="mt-6 border-t border-line pt-4 text-sm leading-6 text-[#565850]">
+              Each artifact has a visible creator, checker, or approver—so the production trail stays legible from manuscript to layout handoff.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="workflow" class="shell py-20 sm:py-28">
+        <p class="rule-label">Workflow</p>
+        <div class="mt-9 grid gap-8 lg:grid-cols-[.8fr_1.2fr]">
+          <div>
+            <h2 class="font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">A repeatable editorial loop, not a black box.</h2>
+            <p class="mt-5 max-w-lg text-lg leading-8 text-[#4d504a]">A private illustrated story compendium can move deliberately from source to handoff without hiding structural decisions in a document maze.</p>
+          </div>
+          <aside class="code-panel self-start" aria-label="Example source-to-output trace">
+            <div class="code-heading"><span>source → trace</span><span class="dot" aria-hidden="true"></span></div>
+            <pre class="overflow-x-auto p-5 font-mono text-[0.76rem] leading-7"><code><span class="text-[#d8a18d]">story.md</span> <span class="text-[#8d9689]">(human-authored)</span>
+  └── <span class="text-[#c8cec0]">paragraph identities</span>
+      └── <span class="text-[#d8a18d]">story.flow.yaml + art/briefs</span> <span class="text-[#8d9689]">(skill proposals)</span>
+          └── <span class="text-[#d8a18d]">hardcover.composition.yaml</span>
+              └── <span class="text-[#a7bfa9]">validation + proof.html</span>
+                  └── <span class="text-[#a7bfa9]">reviewed package/manifest.json</span></code></pre>
+          </aside>
+        </div>
+        <ol class="mt-14 grid gap-0 border-t border-line xl:grid-cols-6">
+          <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:pr-7">
+            <span class="step-number">1</span>
+            <h3 class="mt-5 font-display text-2xl">Author in Markdown</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">People maintain clean prose, front matter, and deliberate anchors in a readable story directory.</p>
+          </li>
+          <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:px-7">
+            <span class="step-number">2</span>
+            <h3 class="mt-5 font-display text-2xl">Interpret intent</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">A planning skill drafts Flow and Composition Plans for roles, energy, pacing, and layout families.</p>
+          </li>
+          <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:px-7">
+            <span class="step-number">3</span>
+            <h3 class="mt-5 font-display text-2xl">Validate and inspect</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Compositor checks source coverage and constraints, then produces diagnostics and an HTML proof.</p>
+          </li>
+          <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:px-7">
+            <span class="step-number">4</span>
+            <h3 class="mt-5 font-display text-2xl">Specify and render art</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Separate skills maintain art records and optional candidate files using the team’s chosen tools.</p>
+          </li>
+          <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:px-7">
+            <span class="step-number">5</span>
+            <h3 class="mt-5 font-display text-2xl">Review, select, approve, attach</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Editors and art directors make each of these explicit decisions before an asset joins production.</p>
+          </li>
+          <li class="py-7 xl:pl-7">
+            <span class="step-number">6</span>
+            <h3 class="mt-5 font-display text-2xl">Build for layout</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Compositor creates revisioned text and packages; the layout application owns final design.</p>
+          </li>
+        </ol>
+        <p class="mt-9 max-w-4xl border-l-2 border-moss pl-5 text-base leading-7 text-[#4d504a]">
+          Validation findings and editorial review can return work to a person or skill before the next deterministic build. Final styling, page separation, and typesetting remain under the control of the design system and layout application.
+        </p>
+      </section>
+
+      <section id="artwork" class="border-y border-[#3e5142] bg-[#324238] py-20 text-[#f8f3ea] sm:py-28">
+        <div class="shell grid gap-12 lg:grid-cols-[.95fr_1.05fr] lg:items-center">
+          <div>
+            <p class="eyebrow !text-[#b7c8b5]">Artwork records</p>
+            <h2 class="mt-6 font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">Keep creative work inspectable from prompt to approval.</h2>
+            <p class="mt-6 max-w-xl text-lg leading-8 text-[#e1e7db]">
+              An art-specification skill can maintain a local YAML record for intent, source linkage, generation direction, candidates, feedback, and selection. Compositor validates its source and asset relationships without pretending validation is a creative judgment.
+            </p>
+            <ol class="mt-9 flex flex-wrap gap-x-2 gap-y-3 font-mono text-xs font-bold uppercase tracking-[0.12em] text-[#f0c4b0]" aria-label="Artwork lifecycle">
+              <li>Specify</li><li aria-hidden="true">→</li><li>Generate candidates</li><li aria-hidden="true">→</li><li>Review</li><li aria-hidden="true">→</li><li>Select</li><li aria-hidden="true">→</li><li>Approve</li><li aria-hidden="true">→</li><li>Attach</li>
+            </ol>
+            <p class="mt-8 border-t border-[#718170] pt-5 text-sm leading-6 text-[#d8e1d4]">
+              A rendering skill is optional and uses the creative team’s chosen tools to create candidate files. Editors and art directors review them. Selection records a preferred candidate; approval and attachment remain separate, explicit editorial gates. Compositor does not generate or revise images.
+            </p>
+          </div>
+          <figure class="art-frame shadow-[0_18px_42px_rgba(11,20,13,.28)]" aria-labelledby="art-caption">
+            <div class="absolute inset-x-[14%] top-[17%] h-px bg-moss/70"></div>
+            <div class="absolute bottom-[20%] left-[18%] h-px w-[58%] bg-moss/70"></div>
+            <div class="absolute bottom-[20%] left-[18%] h-[28%] w-px bg-moss/70"></div>
+            <div class="absolute right-[24%] top-[29%] h-[31%] w-px bg-moss/70"></div>
+            <div class="absolute inset-x-0 bottom-0 border-t border-[#bcae9c] bg-[#d6ccbc] px-5 py-4 font-mono text-[0.68rem] font-bold uppercase tracking-[0.12em] text-[#4c5d4d]">
+              opening-illustration · local record · needs review
+            </div>
+            <figcaption id="art-caption" class="sr-only">A neutral placeholder for a structured artwork record, not a proposed illustration.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="border-b border-line bg-[#eee7da]/60 py-16 sm:py-20">
+        <div class="shell grid gap-8 lg:grid-cols-[.8fr_1.2fr]">
+          <div>
+            <p class="rule-label">Approval is a state, not a suggestion</p>
+            <h2 class="mt-5 font-display text-3xl leading-tight tracking-[-0.02em] sm:text-4xl">A candidate is not a finished asset.</h2>
+          </div>
+          <div class="grid gap-6 sm:grid-cols-3">
+            <article>
+              <p class="font-mono text-xs text-rust">01 · SELECT</p>
+              <p class="mt-3 text-sm leading-6 text-[#565850]">Capture the candidate the team wants to discuss, with feedback where useful.</p>
+            </article>
+            <article class="border-t border-line pt-6 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+              <p class="font-mono text-xs text-rust">02 · REVIEW + APPROVE</p>
+              <p class="mt-3 text-sm leading-6 text-[#565850]">Make the editorial decision visible, including rejection or supersession when the work changes direction.</p>
+            </article>
+            <article class="border-t border-line pt-6 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+              <p class="font-mono text-xs text-rust">03 · ATTACH</p>
+              <p class="mt-3 text-sm leading-6 text-[#565850]">Connect the approved local asset to the requirement and manifest for the production handoff.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="outputs" class="shell py-20 sm:py-28">
+        <p class="rule-label">Outputs</p>
+        <div class="mt-9 grid gap-10 lg:grid-cols-[.85fr_1.15fr]">
+          <div>
+            <h2 class="font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">Artifacts that make a handoff easier to inspect.</h2>
+          </div>
+          <p class="max-w-2xl text-lg leading-8 text-[#4d504a]">The point is not to claim a finished book layout. It is to make the transition from manuscript to layout more legible, while preserving a traceable link to what the team approved.</p>
+        </div>
+        <div class="mt-12 grid border-t border-line md:grid-cols-2">
+          <article class="border-b border-line py-7 md:pr-10">
+            <h3 class="font-display text-2xl">Validation results and JSON reports</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Machine-readable diagnostics for repeatable tooling, checks, and review queues.</p>
+          </article>
+          <article class="border-b border-line py-7 md:border-l md:pl-10">
+            <h3 class="font-display text-2xl">HTML proofs</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">A tangible place for editorial and visual review before a layout handoff.</p>
+          </article>
+          <article class="border-b border-line py-7 md:border-b-0 md:pr-10">
+            <h3 class="font-display text-2xl">Layout-ready plain-text exports</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Revision-aware text prepared for the next application in the production chain.</p>
+          </article>
+          <article class="py-7 md:border-l md:pl-10">
+            <h3 class="font-display text-2xl">Revisioned delivery packages</h3>
+            <p class="mt-3 text-sm leading-6 text-[#565850]">Opener, spread, manifest, and diagnostics information held together for a clearer delivery.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="quick-start" class="border-y border-line bg-[#e7ddd0] py-20 sm:py-24">
+        <div class="shell grid gap-10 lg:grid-cols-[.8fr_1.2fr] lg:items-center">
+          <div>
+            <p class="rule-label">Quick start</p>
+            <h2 class="mt-6 font-display text-4xl leading-tight tracking-[-0.025em] sm:text-5xl">Start with the manuscript you already trust.</h2>
+          </div>
+          <div class="min-w-0">
+            <aside class="mb-6 border-l-2 border-rust bg-[#f3ebdf] px-5 py-5" aria-label="Typical skill session">
+              <p class="font-mono text-xs font-bold uppercase tracking-[0.12em] text-rust">Typical skill session</p>
+              <ol class="mt-4 grid gap-3 text-sm leading-6 text-[#4d504a]">
+                <li><strong class="text-ink">1.</strong> A person asks a planning skill to inspect a story and draft structured plans for review.</li>
+                <li><strong class="text-ink">2.</strong> The team validates, reads the diagnostics and proof, then accepts or revises those proposals.</li>
+                <li><strong class="text-ink">3.</strong> When art is needed, separate skills manage candidates while a person reviews, selects, approves, and attaches.</li>
+                <li><strong class="text-ink">4.</strong> The team builds a deterministic package and hands it to layout.</li>
+              </ol>
+            </aside>
+            <pre class="code-panel"><code class="block overflow-x-auto p-6 font-mono text-sm leading-7">compositor init
+<span class="text-[#8d9689]"># Add a compendium and story Markdown files.</span>
+compositor build --format json
+compositor proof</code></pre>
+            <p class="mt-5 text-base leading-7 text-[#4d504a]">Use JSON reports in repeatable human or skill-assisted tooling, and open the generated proof when the team needs to review the result.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="shell py-20 text-center sm:py-28">
+        <p class="eyebrow mx-auto w-fit">Compositor</p>
+        <h2 class="mx-auto mt-6 max-w-3xl font-display text-4xl leading-tight tracking-[-0.03em] sm:text-6xl">Make the handoff from manuscript to production legible.</h2>
+        <a class="button-primary mt-9" href="#quick-start">Begin with quick start</a>
+      </section>
+    </main>
+
+    <footer class="border-t border-line">
+      <div class="shell flex flex-col gap-3 py-7 text-xs font-bold uppercase tracking-[0.11em] text-[#565850] sm:flex-row sm:items-center sm:justify-between">
+        <span>Compositor</span>
+        <span>Markdown-first book production</span>
+        <a class="text-link !text-[0.68rem]" href="#top">Back to top ↑</a>
+      </div>
+    </footer>
+  </body>
+</html>
