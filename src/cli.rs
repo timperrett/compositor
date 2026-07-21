@@ -40,27 +40,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Init {
-        #[arg(long)]
-        force: bool,
+    Approve {
+        kind: ApprovalKind,
+        id: String,
+        revision: String,
     },
-    Parse {
-        #[arg(long)]
-        story: Option<String>,
+    Art {
+        #[command(subcommand)]
+        command: ArtCommand,
     },
-    Validate {
-        #[arg(long)]
-        story: Option<String>,
-        #[arg(long)]
-        strict: bool,
-    },
-    /// Display compendiums, stories, and optionally their art IDs as a tree.
-    Tree {
-        /// Include art IDs from story-linked art briefs.
-        #[arg(long)]
-        art: bool,
-    },
-    Status,
     Build {
         /// A compendium ID or directory name. Builds every story when omitted after this target.
         compendium: Option<String>,
@@ -85,9 +73,27 @@ enum Command {
         #[arg(long, conflicts_with = "compendium")]
         story: Option<String>,
     },
+    Diagnose {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
     Diff {
         #[command(subcommand)]
         target: DiffTarget,
+    },
+    Init {
+        #[arg(long)]
+        force: bool,
+    },
+    Inspect {
+        story: PathBuf,
+    },
+    Parse {
+        #[arg(long)]
+        story: Option<String>,
     },
     Plan {
         story: String,
@@ -97,42 +103,6 @@ enum Command {
     Proof {
         #[arg(long)]
         story: Option<String>,
-    },
-    Art {
-        #[command(subcommand)]
-        command: ArtCommand,
-    },
-    Approve {
-        kind: ApprovalKind,
-        id: String,
-        revision: String,
-    },
-    Inspect {
-        story: PathBuf,
-    },
-    Source {
-        #[command(subcommand)]
-        command: SourceCommand,
-    },
-    ValidateFlow {
-        story: PathBuf,
-        flow: PathBuf,
-        #[arg(long)]
-        design_system: PathBuf,
-    },
-    ValidateComposition {
-        story: PathBuf,
-        flow: PathBuf,
-        composition: PathBuf,
-        #[arg(long)]
-        design_system: PathBuf,
-    },
-    Diagnose {
-        story: PathBuf,
-        flow: PathBuf,
-        composition: PathBuf,
-        #[arg(long)]
-        design_system: PathBuf,
     },
     Reconcile {
         composition: PathBuf,
@@ -144,29 +114,59 @@ enum Command {
         old_id: String,
         new_id: String,
     },
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
+    Status,
+    /// Display compendiums, stories, and optionally their art IDs as a tree.
+    Tree {
+        /// Include art IDs from story-linked art briefs.
+        #[arg(long)]
+        art: bool,
+    },
+    Validate {
+        #[arg(long)]
+        story: Option<String>,
+        #[arg(long)]
+        strict: bool,
+    },
+    ValidateComposition {
+        story: PathBuf,
+        flow: PathBuf,
+        composition: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
+    ValidateFlow {
+        story: PathBuf,
+        flow: PathBuf,
+        #[arg(long)]
+        design_system: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum DiffTarget {
-    Source,
     Plan {
         story: String,
         before: String,
         after: String,
     },
+    Source,
 }
 
 #[derive(Debug, Subcommand)]
 enum SourceCommand {
-    Sync {
-        story: PathBuf,
-        #[arg(long)]
-        write: bool,
-    },
     Resolve {
         story: PathBuf,
         old_id: String,
         candidate_fingerprint: String,
+        #[arg(long)]
+        write: bool,
+    },
+    Sync {
+        story: PathBuf,
         #[arg(long)]
         write: bool,
     },
@@ -178,50 +178,14 @@ enum ApprovalKind {
 
 #[derive(Debug, Subcommand)]
 enum ArtCommand {
-    Registry {
-        #[arg(long)]
-        write: bool,
-    },
-    MigrateBriefs {
-        #[arg(long)]
-        write: bool,
-    },
-    Register {
-        art_id: String,
-    },
-    IngestCandidate {
-        art_id: String,
-        source: PathBuf,
-        #[arg(long)]
-        revision: String,
-        #[arg(long)]
-        attempt: u32,
-    },
-    Select {
-        art_id: String,
-        candidate_id: String,
-        #[arg(long)]
-        feedback: Option<String>,
-    },
-    Review {
-        art_id: String,
-    },
     ApproveAsset {
         art_id: String,
     },
-    Reject {
+    Attach {
         art_id: String,
-    },
-    Supersede {
-        art_id: String,
-        successor: String,
-    },
-    List {
+        path: Option<PathBuf>,
         #[arg(long)]
-        story: Option<String>,
-    },
-    Inspect {
-        art_id: String,
+        selected: bool,
     },
     Brief {
         art_id: String,
@@ -232,17 +196,53 @@ enum ArtCommand {
         #[arg(long)]
         edition: String,
     },
+    IngestCandidate {
+        art_id: String,
+        source: PathBuf,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        attempt: u32,
+    },
+    Inspect {
+        art_id: String,
+    },
+    List {
+        #[arg(long)]
+        story: Option<String>,
+    },
+    MigrateBriefs {
+        #[arg(long)]
+        write: bool,
+    },
+    Register {
+        art_id: String,
+    },
+    Registry {
+        #[arg(long)]
+        write: bool,
+    },
+    Reject {
+        art_id: String,
+    },
+    Review {
+        art_id: String,
+    },
+    Select {
+        art_id: String,
+        candidate_id: String,
+        #[arg(long)]
+        feedback: Option<String>,
+    },
+    Supersede {
+        art_id: String,
+        successor: String,
+    },
     Validate {
         #[arg(long)]
         story: Option<String>,
         #[arg(long)]
         strict: bool,
-    },
-    Attach {
-        art_id: String,
-        path: Option<PathBuf>,
-        #[arg(long)]
-        selected: bool,
     },
 }
 
@@ -276,6 +276,37 @@ pub fn run() -> Result<(), AppError> {
             output,
         } => reconcile_composition(&plan, &overrides_path, &output, cli.format),
         command => execute(&root, cli.format, command),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_subcommands_are_alphabetical() {
+        let cli = Cli::command();
+        assert_subcommands_are_alphabetical(&cli);
+
+        for name in ["art", "diff", "source"] {
+            let nested = cli
+                .get_subcommands()
+                .find(|command| command.get_name() == name)
+                .expect("nested command should exist");
+            assert_subcommands_are_alphabetical(nested);
+        }
+    }
+
+    fn assert_subcommands_are_alphabetical(command: &clap::Command) {
+        let actual: Vec<_> = command
+            .get_subcommands()
+            .filter(|subcommand| subcommand.get_name() != "help")
+            .map(|subcommand| subcommand.get_name().to_owned())
+            .collect();
+        let mut expected = actual.clone();
+        expected.sort_unstable();
+        assert_eq!(actual, expected, "subcommands for `{}`", command.get_name());
     }
 }
 
