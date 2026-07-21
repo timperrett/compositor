@@ -27,11 +27,14 @@ mod proof_command;
 #[command(
     name = "compositor",
     version = crate::BUILD_VERSION,
-    about = "Deterministic Markdown-to-book production tooling"
+    about = "Deterministic Markdown-to-book production tooling",
+    after_help = "Common workflows:\n  compositor init\n      Create the project directories and starter compositor.toml.\n  compositor validate\n      Check authored Markdown and generated state for blocking issues.\n  compositor build --mode conservative\n      Rebuild production state while preserving unaffected assignments.\n  compositor proof\n      Write HTML proofs to output/proofs/ for editorial review.\n  compositor build <compendium> [story]\n      Create a delivery package from the conventional Flow and Composition files.\n\nRun `compositor help <command>` for command-specific guidance, or\n`compositor help art <command>` for an artwork workflow."
 )]
 struct Cli {
-    #[arg(long, global = true)]
+    /// Project directory to read and write. Defaults to the current directory.
+    #[arg(long, global = true, value_name = "DIRECTORY")]
     root: Option<PathBuf>,
+    /// Format reports as readable text or stable machine-readable JSON.
     #[arg(long, value_enum, default_value_t = OutputFormat::Human, global = true)]
     format: OutputFormat,
     #[command(subcommand)]
@@ -39,134 +42,257 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(verbatim_doc_comment)]
 enum Command {
+    /// Approve a generated artifact revision for downstream use.
+    ///
+    /// Example: `compositor approve plan my-story v001`
     Approve {
+        /// Kind of artifact to approve. Currently only `plan` is supported.
         kind: ApprovalKind,
+        /// Story or artifact ID whose revision should be approved.
         id: String,
+        /// Revision to approve, for example `v001`.
         revision: String,
     },
+    /// Inspect and manage artwork requirements, briefs, candidates, and assets.
     Art {
         #[command(subcommand)]
         command: ArtCommand,
     },
+    /// Build production state or create a conventional delivery package.
+    ///
+    /// Without a compendium target, this updates `.compositor/` production
+    /// state. With a compendium target, it packages the selected story or all
+    /// stories using `story.md`, `story.flow.yaml`, and the edition Composition
+    /// Plan found beside the manuscript.
+    ///
+    /// Examples:
+    /// `compositor build --mode conservative`
+    ///
+    /// `compositor build my-compendium my-story --asset-policy approved --strict-art`
     Build {
-        /// A compendium ID or directory name. Builds every story when omitted after this target.
+        /// Compendium ID or directory name for a delivery package. When present,
+        /// every story is built unless a package story is supplied.
         compendium: Option<String>,
-        /// A story ID or directory name within the selected compendium.
+        /// Story ID or directory name within the selected compendium.
         package_story: Option<String>,
-        /// Override the design system derived from the composition plan.
+        /// Design-system directory to use instead of the plan-derived directory.
         #[arg(long)]
         design_system: Option<PathBuf>,
-        /// Override the conventional art asset registry at art/assets.yaml.
+        /// Art asset registry to use instead of `art/assets.yaml`.
         #[arg(long)]
         assets: Option<PathBuf>,
+        /// Minimum artwork status accepted by a package: `draft`, `review`, or `approved`.
         #[arg(long, default_value = "draft")]
         asset_policy: String,
+        /// Treat any artwork validation issue as a package-build failure.
         #[arg(long)]
         strict_art: bool,
-        /// Override the generated package destination (single-story builds only).
+        /// Package destination override; valid only for a single-story package build.
         #[arg(long)]
         output: Option<PathBuf>,
+        /// Production-state planning mode: `conservative`, `rebalance`, or `fresh`.
         #[arg(long, default_value = "conservative")]
         mode: String,
         /// Build production state for one story ID instead of a delivery package.
         #[arg(long, conflicts_with = "compendium")]
         story: Option<String>,
     },
+    /// Diagnose one Flow and Composition Plan pair and report compatibility issues.
+    ///
+    /// Example: `compositor diagnose story.md story.flow.yaml hardcover.composition.yaml --design-system design-systems/print`
     Diagnose {
+        /// Story Markdown file used as the source of truth.
         story: PathBuf,
+        /// Story Flow Plan to diagnose against the source.
         flow: PathBuf,
+        /// Composition Plan to diagnose against the Flow Plan.
         composition: PathBuf,
+        /// Design-system directory referenced by the Composition Plan.
         #[arg(long)]
         design_system: PathBuf,
     },
+    /// Compare source state or two saved production-plan revisions.
+    ///
+    /// Examples:
+    /// `compositor diff source`
+    ///
+    /// `compositor diff plan my-story v001 v002`
     Diff {
         #[command(subcommand)]
         target: DiffTarget,
     },
+    /// Create the directory layout and starter files for a new project.
+    ///
+    /// Example: `compositor --root ./my-book init`
     Init {
+        /// Replace existing generated project files when they already exist.
         #[arg(long)]
         force: bool,
     },
+    /// Inspect a Markdown story and print its durable paragraph/source metadata.
+    ///
+    /// Example: `compositor inspect compendiums/01-book/my-story/story.md`
     Inspect {
+        /// Story Markdown file to inspect, for example `compendiums/01-book/story/story.md`.
         story: PathBuf,
     },
+    /// Parse the project and report its discovered compendiums, stories, and units.
+    ///
+    /// Example: `compositor parse --story my-story --format json`
     Parse {
+        /// Limit parsing to one story ID; omit to parse the entire project.
         #[arg(long)]
         story: Option<String>,
     },
+    /// Build or refresh the production plan for one story.
+    ///
+    /// Example: `compositor plan my-story --mode rebalance`
     Plan {
+        /// Story ID to plan.
         story: String,
+        /// Planning mode: `conservative`, `rebalance`, or `fresh`.
         #[arg(long, default_value = "conservative")]
         mode: String,
     },
+    /// Generate HTML proofs for all stories, or one selected story.
+    ///
+    /// Example: `compositor proof --story my-story`
     Proof {
+        /// Story ID to prove; omit to write each story proof and compendium indexes.
         #[arg(long)]
         story: Option<String>,
     },
+    /// Reconcile a Composition Plan with overrides and write the resolved plan.
+    ///
+    /// Example: `compositor reconcile story.composition.yaml overrides.yaml --output resolved.composition.yaml`
     Reconcile {
+        /// Composition Plan to reconcile.
         composition: PathBuf,
+        /// Overrides file containing deliberate editorial adjustments.
         overrides: PathBuf,
+        /// Output path for the reconciled Composition Plan.
         #[arg(long)]
         output: PathBuf,
     },
+    /// Record a deliberate manual identity match between two story IDs.
+    ///
+    /// Example: `compositor resolve old-story-id my-story-id`
     Resolve {
+        /// Previous or automatically generated story ID.
         old_id: String,
+        /// Stable story ID that should replace or resolve the old ID.
         new_id: String,
     },
+    /// Synchronize or repair the paragraph ledger for a Flow-ready story.
+    ///
+    /// Examples:
+    /// `compositor source sync story.md --write`
+    ///
+    /// `compositor source resolve story.md paragraph-001 fingerprint --write`
     Source {
         #[command(subcommand)]
         command: SourceCommand,
     },
+    /// Show change detection, active/candidate plans, and artwork requirements.
+    ///
+    /// Example: `compositor status --format json`
     Status,
     /// Display compendiums, stories, and optionally their art IDs as a tree.
+    ///
+    /// Example: `compositor tree --art`
     Tree {
         /// Include art IDs from story-linked art briefs.
         #[arg(long)]
         art: bool,
     },
+    /// Validate authored Markdown and generated production state.
+    ///
+    /// Examples:
+    /// `compositor validate`
+    ///
+    /// `compositor validate --story my-story --strict`
     Validate {
+        /// Limit validation to one story ID; omit to validate the whole project.
         #[arg(long)]
         story: Option<String>,
+        /// Also fail for warnings, not only errors.
         #[arg(long)]
         strict: bool,
     },
+    /// Validate a Composition Plan against its Flow Plan and design system.
+    ///
+    /// Example: `compositor validate-composition story.md story.flow.yaml hardcover.composition.yaml --design-system design-systems/print`
     ValidateComposition {
+        /// Story Markdown file used to check title and source relationships.
         story: PathBuf,
+        /// Story Flow Plan referenced by the Composition Plan.
         flow: PathBuf,
+        /// Composition Plan to validate.
         composition: PathBuf,
+        /// Design-system directory used for layout-family validation.
         #[arg(long)]
         design_system: PathBuf,
     },
+    /// Validate a Story Flow Plan against its Markdown source and design system.
+    ///
+    /// Example: `compositor validate-flow story.md story.flow.yaml --design-system design-systems/print`
     ValidateFlow {
+        /// Story Markdown file whose paragraph IDs and source revision are checked.
         story: PathBuf,
+        /// Story Flow Plan to validate.
         flow: PathBuf,
+        /// Design-system directory used for role, energy, and pacing validation.
         #[arg(long)]
         design_system: PathBuf,
     },
 }
 
 #[derive(Debug, Subcommand)]
+#[command(verbatim_doc_comment)]
 enum DiffTarget {
+    /// Compare two saved plan revisions and write an HTML comparison report.
+    ///
+    /// Example: `compositor diff plan my-story v001 v002`
     Plan {
+        /// Story ID whose revisions should be compared.
         story: String,
+        /// Earlier plan revision, for example `v001`.
         before: String,
+        /// Later plan revision, for example `v002`.
         after: String,
     },
+    /// Recompute and report changes between source and the current production state.
+    ///
+    /// Example: `compositor diff source`
     Source,
 }
 
 #[derive(Debug, Subcommand)]
+#[command(verbatim_doc_comment)]
 enum SourceCommand {
+    /// Rebind an unmatched paragraph to an existing durable paragraph ID.
+    ///
+    /// Example: `compositor source resolve story.md paragraph-001 fingerprint --write`
     Resolve {
+        /// Story Markdown file whose paragraph ledger should be repaired.
         story: PathBuf,
+        /// Existing paragraph ID to preserve.
         old_id: String,
+        /// Fingerprint of the candidate paragraph that should receive the ID.
         candidate_fingerprint: String,
+        /// Write the resolution; without this flag, show the proposed result only.
         #[arg(long)]
         write: bool,
     },
+    /// Generate or update the paragraph ledger and annotated review view.
+    ///
+    /// Example: `compositor source sync story.md --write`
     Sync {
+        /// Story Markdown file to synchronize.
         story: PathBuf,
+        /// Write `story.paragraphs.yaml` and `story.annotated.md`; without this flag, preview only.
         #[arg(long)]
         write: bool,
     },
@@ -177,70 +303,153 @@ enum ApprovalKind {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(verbatim_doc_comment)]
 enum ArtCommand {
+    /// Mark an attached artwork record as approved for production use.
+    ///
+    /// Example: `compositor art approve-asset lantern-opener`
     ApproveAsset {
+        /// Artwork ID from the illustration requirement and art brief.
         art_id: String,
     },
+    /// Attach approved artwork to an illustration requirement.
+    ///
+    /// Supply a path to an already approved file, or use `--selected` to copy
+    /// the selected candidate from the art brief into `assets/approved/`.
+    ///
+    /// Examples:
+    /// `compositor art attach lantern-opener assets/approved/lantern-opener.png`
+    ///
+    /// `compositor art attach lantern-opener --selected`
     Attach {
+        /// Artwork ID to attach.
         art_id: String,
+        /// Approved image path when attaching an existing approved asset.
         path: Option<PathBuf>,
+        /// Copy the selected candidate into the approved asset directory first.
         #[arg(long)]
         selected: bool,
     },
+    /// Print the validated YAML art brief for one artwork ID.
+    ///
+    /// Example: `compositor art brief lantern-opener`
     Brief {
+        /// Artwork ID whose brief should be shown.
         art_id: String,
     },
+    /// Report opener and narrative-spread artwork coverage for one edition.
+    ///
+    /// Example: `compositor art coverage --story my-story --edition hardcover`
     Coverage {
+        /// Story ID whose Flow and Composition Plans should be checked.
         #[arg(long)]
         story: String,
+        /// Edition ID used to locate `<edition>.composition.yaml` beside the story.
         #[arg(long)]
         edition: String,
     },
+    /// Copy a generated image into the brief as a geometry-checked candidate.
+    ///
+    /// Candidates that do not match the current requirement geometry are kept
+    /// under the revision's rejected-attempt log for later review.
+    ///
+    /// Example: `compositor art ingest-candidate lantern-opener candidate.png --revision r04 --attempt 1`
     IngestCandidate {
+        /// Artwork ID whose requirement and brief should receive the candidate.
         art_id: String,
+        /// PNG, JPG, JPEG, or WebP file to copy into the project.
         source: PathBuf,
+        /// Requirement revision, for example `r04`.
         #[arg(long)]
         revision: String,
+        /// Generation attempt number from 1 through 3.
         #[arg(long)]
         attempt: u32,
     },
+    /// Show the requirement, brief, candidates, selection, and attachment state.
+    ///
+    /// Example: `compositor art inspect lantern-opener`
     Inspect {
+        /// Artwork ID to inspect.
         art_id: String,
     },
+    /// List illustration requirements and their current brief/candidate state.
+    ///
+    /// Example: `compositor art list --story my-story --format json`
     List {
+        /// Limit the list to one story ID; omit to list the whole project.
         #[arg(long)]
         story: Option<String>,
     },
+    /// Preview or write migration of legacy Markdown-style art briefs to YAML v2.
+    ///
+    /// Example: `compositor art migrate-briefs --write`
     MigrateBriefs {
+        /// Rewrite the brief files; without this flag, report the files that would change.
         #[arg(long)]
         write: bool,
     },
+    /// Create a registry entry for an artwork requirement.
+    ///
+    /// Example: `compositor art register lantern-opener`
     Register {
+        /// Artwork ID to add to `art/assets.yaml`.
         art_id: String,
     },
+    /// Preview or write migration of the artwork asset registry.
+    ///
+    /// Example: `compositor art registry --write`
     Registry {
+        /// Write the migrated registry to `art/assets.yaml`.
         #[arg(long)]
         write: bool,
     },
+    /// Mark an artwork record as rejected.
+    ///
+    /// Example: `compositor art reject lantern-opener`
     Reject {
+        /// Artwork ID to reject.
         art_id: String,
     },
+    /// Move an artwork record into review status.
+    ///
+    /// Example: `compositor art review lantern-opener`
     Review {
+        /// Artwork ID ready for human review.
         art_id: String,
     },
+    /// Select one candidate in an art brief without approving or attaching it.
+    ///
+    /// Example: `compositor art select lantern-opener b --feedback "Use candidate b; preserve the warm window light."`
     Select {
+        /// Artwork ID whose candidate should be selected.
         art_id: String,
+        /// Candidate ID, usually `a`, `b`, or `c`.
         candidate_id: String,
+        /// Optional editorial feedback recorded with the selection.
         #[arg(long)]
         feedback: Option<String>,
     },
+    /// Mark an artwork record as superseded by another artwork ID.
+    ///
+    /// Example: `compositor art supersede old-opener new-opener`
     Supersede {
+        /// Existing artwork ID to supersede.
         art_id: String,
+        /// Successor artwork ID that replaces it.
         successor: String,
     },
+    /// Validate art briefs, requirements, and the asset registry.
+    ///
+    /// Examples:
+    /// `compositor art validate --strict`
+    ///
+    /// `compositor art validate --story my-story --format json`
     Validate {
+        /// Limit validation to one story ID; omit to validate all artwork records.
         #[arg(long)]
         story: Option<String>,
+        /// Also fail for warnings, not only blocking issues.
         #[arg(long)]
         strict: bool,
     },
