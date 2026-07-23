@@ -1,11 +1,14 @@
 use crate::art_brief::{self, ArtUsage};
 use crate::assets::{self, AssetRegistry, AssetStatus};
-use crate::composition::{ArtReference, CompositionPlan};
-use crate::config::Config;
+use crate::composition::{
+    ArtReference, CompositionPlan, Edition, IllustrationIntent, LayoutChoice, OpenerPlacement,
+};
+use crate::config::{Config, ParagraphEconomyConfig};
+use crate::discovery::discover;
 use crate::flow::{SourceRef, StoryFlowPlan};
 use crate::model::{ArtGeometry, ArtLayout, Severity, Story, ValidationIssue, ValidationReport};
 use crate::AppError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -41,6 +44,22 @@ struct TextManifest {
     file: &'static str,
     word_count: usize,
     density: String,
+    paragraph_economy: ParagraphEconomyMetrics,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ParagraphEconomyMetrics {
+    pub paragraph_count: usize,
+    pub short_paragraph_count: usize,
+    pub longest_short_paragraph_run: usize,
+    pub paragraphs_per_100_words: f64,
+    pub status: ParagraphEconomyStatus,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphEconomyStatus {
+    Ok,
+    Warning,
+    Waived,
 }
 #[derive(Debug, Serialize)]
 struct ArtManifest {
@@ -133,17 +152,7 @@ pub fn build(
         fs::create_dir_all(spread_directory.join("art"))?;
         let paragraphs =
             source_paragraphs(story, &flow_spread.source.from, &flow_spread.source.through)?;
-        let text = paragraphs
-            .iter()
-            .map(|paragraph| {
-                format!(
-                    "<!-- source: paragraph:{} -->\n\n{}",
-                    paragraph.id.as_deref().unwrap_or("unknown"),
-                    paragraph.content
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let text = render_spread_markdown(&paragraphs);
         fs::write(spread_directory.join("text.md"), &text)?;
         fs::write(
             spread_directory.join("text.txt"),
@@ -152,7 +161,28 @@ pub fn build(
         let word_count = paragraphs
             .iter()
             .map(|paragraph| paragraph.word_count)
-            .sum();
+            .sum::<usize>();
+        let waiver = paragraph_economy_waiver(flow, &flow_spread.id);
+        let paragraph_economy = paragraph_economy_metrics(
+            &paragraphs,
+            config.editorial.paragraph_economy.as_ref(),
+            waiver,
+        );
+        if paragraph_economy.status == ParagraphEconomyStatus::Warning {
+            package_issue(
+                &mut report,
+                Severity::Warning,
+                "PARAGRAPH_ECONOMY_FRAGMENTED",
+                format!(
+                    "spread has {:.1} paragraphs per 100 words and a run of {} short paragraphs",
+                    paragraph_economy.paragraphs_per_100_words,
+                    paragraph_economy.longest_short_paragraph_run
+                ),
+                &directory,
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+        }
         let art = composition_spread
             .art_assets
             .iter()
@@ -174,7 +204,7 @@ pub fn build(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let manifest = SpreadManifest {
-            schema: "compositor.dev/resolved-spread/v2",
+            schema: "compositor.dev/resolved-spread/v3",
             id: &flow_spread.id,
             number: index + 1,
             role: &flow_spread.role,
@@ -184,6 +214,7 @@ pub fn build(
                 file: "text.txt",
                 word_count,
                 density: composition_spread.text.density.clone(),
+                paragraph_economy,
             },
             illustration: &composition_spread.illustration,
             art,
@@ -223,6 +254,455 @@ pub fn build(
     }
     fs::rename(package_root, output)?;
     Ok(report)
+}
+
+#[derive(Debug, Serialize)]
+pub struct PackageValidationOutput {
+    pub package: String,
+    pub story: String,
+    pub source_revision: String,
+    pub checked_spreads: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageRootManifest {
+    story: PackageStoryManifest,
+    edition: Edition,
+    opener: PackageOpenerEntry,
+    spreads: PackageSpreadsManifest,
+}
+#[derive(Debug, Deserialize)]
+struct PackageStoryManifest {
+    id: String,
+    title: String,
+    source_revision: String,
+}
+#[derive(Debug, Deserialize)]
+struct PackageOpenerEntry {
+    directory: String,
+    title: String,
+    placement: OpenerPlacement,
+}
+#[derive(Debug, Deserialize)]
+struct PackageOpenerManifest {
+    schema: String,
+    title: String,
+    placement: OpenerPlacement,
+}
+#[derive(Debug, Deserialize)]
+struct PackageSpreadsManifest {
+    count: usize,
+    entries: Vec<PackageSpreadEntry>,
+}
+#[derive(Debug, Deserialize)]
+struct PackageSpreadEntry {
+    directory: String,
+    id: String,
+    role: String,
+}
+#[derive(Debug, Deserialize)]
+struct PackageSpreadManifest {
+    schema: String,
+    id: String,
+    number: usize,
+    role: String,
+    layout: LayoutChoice,
+    text: PackageTextManifest,
+    illustration: IllustrationIntent,
+}
+#[derive(Debug, Deserialize)]
+struct PackageTextManifest {
+    file: String,
+    word_count: usize,
+    density: String,
+    #[serde(default)]
+    paragraph_economy: Option<ParagraphEconomyMetrics>,
+}
+
+/// Verifies that a package was rendered from the current source and plans.
+/// This function is deliberately read-only: package generation remains the
+/// only operation that writes package artifacts.
+pub fn validate_package(
+    root: &Path,
+    config: &Config,
+    package: &Path,
+) -> Result<(PackageValidationOutput, ValidationReport), AppError> {
+    let package = if package.is_absolute() {
+        package.to_path_buf()
+    } else {
+        root.join(package)
+    };
+    let manifest_path = package.join("manifest.yaml");
+    let root_manifest: PackageRootManifest = load_yaml(&manifest_path)?;
+    let project = discover(root, config)?;
+    let story = project
+        .compendiums
+        .iter()
+        .flat_map(|compendium| &compendium.stories)
+        .find(|story| story.id == root_manifest.story.id)
+        .ok_or_else(|| {
+            AppError::command(format!(
+                "package story `{}` is not in the current project",
+                root_manifest.story.id
+            ))
+        })?;
+    let story_directory = root
+        .join(&story.source)
+        .parent()
+        .ok_or_else(|| AppError::command("story source has no parent directory".into()))?
+        .to_path_buf();
+    let flow: StoryFlowPlan = load_yaml(&story_directory.join("story.flow.yaml"))?;
+    let composition: CompositionPlan =
+        load_yaml(&story_directory.join(format!("{}.composition.yaml", root_manifest.edition.id)))?;
+    let mut report = ValidationReport::default();
+    if root_manifest.story.title != story.title || root_manifest.story.id != story.id {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_STORY_STALE",
+            "package story metadata does not match the current manuscript".into(),
+            "manifest.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+    if root_manifest.story.source_revision != story.source_hash {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_SOURCE_STALE",
+            "package source revision does not match the current manuscript".into(),
+            "manifest.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+    if flow.story.source_revision != story.source_hash {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_FLOW_STALE",
+            "current Flow Plan source revision does not match the manuscript".into(),
+            "story.flow.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+    if composition.story.id != story.id || composition.edition != root_manifest.edition {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_COMPOSITION_STALE",
+            "package edition metadata does not match the current Composition Plan".into(),
+            "manifest.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+    let expected_opener_title = format!("{}\n", composition.opener.title);
+    let opener_manifest: Result<PackageOpenerManifest, AppError> =
+        load_yaml(&package.join("opener/opener.yaml"));
+    if root_manifest.opener.directory != "opener"
+        || root_manifest.opener.title != composition.opener.title
+        || root_manifest.opener.placement != composition.opener.placement
+        || !matches!(
+            opener_manifest,
+            Ok(PackageOpenerManifest {
+                schema,
+                title,
+                placement,
+            }) if schema == "compositor.dev/story-opener/v1"
+                && title == composition.opener.title
+                && placement == composition.opener.placement
+        )
+        || fs::read_to_string(package.join("opener/title.txt"))
+            .map(|title| title != expected_opener_title)
+            .unwrap_or(true)
+    {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_COMPOSITION_STALE",
+            "package opener metadata does not match the current Composition Plan".into(),
+            "opener",
+            Some(&story.id),
+            None,
+        );
+    }
+    if root_manifest.spreads.count != flow.spreads.len()
+        || root_manifest.spreads.entries.len() != flow.spreads.len()
+    {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_FLOW_STALE",
+            "package spread count does not match the current Flow Plan".into(),
+            "manifest.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+
+    for (index, flow_spread) in flow.spreads.iter().enumerate() {
+        let expected_directory = format!("spreads/{:03}-{}", index + 1, flow_spread.role);
+        let entry = root_manifest.spreads.entries.get(index);
+        if !entry.is_some_and(|entry| {
+            entry.id == flow_spread.id
+                && entry.role == flow_spread.role
+                && entry.directory == expected_directory
+        }) {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_FLOW_STALE",
+                "package spread entry does not match the current Flow Plan".into(),
+                "manifest.yaml",
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+            continue;
+        }
+        let Some(composition_spread) = composition
+            .spreads
+            .iter()
+            .find(|spread| spread.id == flow_spread.id)
+        else {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_COMPOSITION_STALE",
+                "current Composition Plan has no matching spread".into(),
+                "hardcover.composition.yaml",
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+            continue;
+        };
+        let spread_directory = package.join(&expected_directory);
+        let spread_manifest_path = spread_directory.join("spread.yaml");
+        let actual: PackageSpreadManifest = match load_yaml(&spread_manifest_path) {
+            Ok(value) => value,
+            Err(_) => {
+                package_issue(
+                    &mut report,
+                    Severity::Error,
+                    "PACKAGE_SPREAD_MISSING",
+                    "package spread manifest is missing or unreadable".into(),
+                    &expected_directory,
+                    Some(&story.id),
+                    Some(&flow_spread.id),
+                );
+                continue;
+            }
+        };
+        let paragraphs =
+            source_paragraphs(story, &flow_spread.source.from, &flow_spread.source.through)?;
+        let word_count = paragraphs
+            .iter()
+            .map(|paragraph| paragraph.word_count)
+            .sum::<usize>();
+        let metrics = paragraph_economy_metrics(
+            &paragraphs,
+            config.editorial.paragraph_economy.as_ref(),
+            paragraph_economy_waiver(&flow, &flow_spread.id),
+        );
+        if actual.schema != "compositor.dev/resolved-spread/v2"
+            && actual.schema != "compositor.dev/resolved-spread/v3"
+            || actual.id != flow_spread.id
+            || actual.number != index + 1
+            || actual.role != flow_spread.role
+            || actual.layout != composition_spread.layout
+            || actual.illustration != composition_spread.illustration
+            || actual.text.file != "text.txt"
+            || actual.text.word_count != word_count
+            || actual.text.density != composition_spread.text.density
+        {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_COMPOSITION_STALE",
+                "package spread metadata does not match the current Flow or Composition Plan"
+                    .into(),
+                &expected_directory,
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+        }
+        if actual.schema == "compositor.dev/resolved-spread/v3"
+            && actual.text.paragraph_economy.as_ref() != Some(&metrics)
+        {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_TEXT_STALE",
+                "package paragraph-economy metrics do not match the current source".into(),
+                &expected_directory,
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+        }
+        compare_package_text(
+            &mut report,
+            &spread_directory.join("text.md"),
+            &render_spread_markdown(&paragraphs),
+            &expected_directory,
+            story,
+            &flow_spread.id,
+        );
+        compare_package_text(
+            &mut report,
+            &spread_directory.join("text.txt"),
+            &render_spread_text(&paragraphs),
+            &expected_directory,
+            story,
+            &flow_spread.id,
+        );
+        if metrics.status == ParagraphEconomyStatus::Warning {
+            package_issue(
+                &mut report,
+                Severity::Warning,
+                "PARAGRAPH_ECONOMY_FRAGMENTED",
+                format!(
+                    "spread has {:.1} paragraphs per 100 words and a run of {} short paragraphs",
+                    metrics.paragraphs_per_100_words, metrics.longest_short_paragraph_run
+                ),
+                &expected_directory,
+                Some(&story.id),
+                Some(&flow_spread.id),
+            );
+        }
+    }
+    Ok((
+        PackageValidationOutput {
+            package: package.display().to_string(),
+            story: story.id.clone(),
+            source_revision: story.source_hash.clone(),
+            checked_spreads: flow.spreads.len(),
+        },
+        report,
+    ))
+}
+
+fn load_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
+    let text = fs::read_to_string(path)?;
+    serde_yaml::from_str(&text).map_err(|error| {
+        AppError::serialization(format!("could not parse {}: {error}", path.display()))
+    })
+}
+
+fn compare_package_text(
+    report: &mut ValidationReport,
+    path: &Path,
+    expected: &str,
+    package_path: &str,
+    story: &Story,
+    spread_id: &str,
+) {
+    match fs::read_to_string(path) {
+        Ok(actual) if actual == expected => {}
+        Ok(_) | Err(_) => package_issue(
+            report,
+            Severity::Error,
+            "PACKAGE_TEXT_STALE",
+            "package text does not match the current source paragraphs".into(),
+            package_path,
+            Some(&story.id),
+            Some(spread_id),
+        ),
+    }
+}
+
+fn render_spread_markdown(paragraphs: &[&crate::model::SourceParagraph]) -> String {
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            format!(
+                "<!-- source: paragraph:{} -->\n\n{}",
+                paragraph.id.as_deref().unwrap_or("unknown"),
+                paragraph.content
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+pub fn paragraph_economy_metrics(
+    paragraphs: &[&crate::model::SourceParagraph],
+    config: Option<&ParagraphEconomyConfig>,
+    waived: bool,
+) -> ParagraphEconomyMetrics {
+    let paragraph_count = paragraphs.len();
+    let word_count = paragraphs
+        .iter()
+        .map(|paragraph| paragraph.word_count)
+        .sum::<usize>();
+    let short_limit = config
+        .map(|value| value.short_paragraph_max_words)
+        .unwrap_or(0);
+    let mut short_paragraph_count = 0;
+    let mut longest_short_paragraph_run = 0;
+    let mut current_short_paragraph_run = 0;
+    for paragraph in paragraphs {
+        if short_limit > 0 && paragraph.word_count <= short_limit {
+            short_paragraph_count += 1;
+            current_short_paragraph_run += 1;
+            longest_short_paragraph_run =
+                longest_short_paragraph_run.max(current_short_paragraph_run);
+        } else {
+            current_short_paragraph_run = 0;
+        }
+    }
+    let paragraphs_per_100_words = if word_count == 0 {
+        0.0
+    } else {
+        paragraph_count as f64 * 100.0 / word_count as f64
+    };
+    let fragmented = config.is_some_and(|value| {
+        word_count >= value.minimum_words
+            && paragraphs_per_100_words > value.max_paragraphs_per_100_words
+            && longest_short_paragraph_run >= value.max_consecutive_short_paragraphs
+    });
+    ParagraphEconomyMetrics {
+        paragraph_count,
+        short_paragraph_count,
+        longest_short_paragraph_run,
+        paragraphs_per_100_words,
+        status: if fragmented && waived {
+            ParagraphEconomyStatus::Waived
+        } else if fragmented {
+            ParagraphEconomyStatus::Warning
+        } else {
+            ParagraphEconomyStatus::Ok
+        },
+    }
+}
+
+fn paragraph_economy_waiver(flow: &StoryFlowPlan, spread_id: &str) -> bool {
+    flow.notes.iter().any(|note| {
+        note.code == "INTENTIONAL_PARAGRAPH_FRAGMENTATION"
+            && note.severity.eq_ignore_ascii_case("info")
+            && note.spread == spread_id
+            && !note.message.trim().is_empty()
+    })
+}
+
+fn package_issue(
+    report: &mut ValidationReport,
+    severity: Severity,
+    code: &str,
+    message: String,
+    path: impl AsRef<Path>,
+    story_id: Option<&str>,
+    spread_id: Option<&str>,
+) {
+    report.issues.push(ValidationIssue {
+        severity,
+        code: code.into(),
+        message,
+        path: path.as_ref().display().to_string(),
+        story_id: story_id.map(str::to_owned),
+        unit_id: spread_id.map(str::to_owned),
+    });
 }
 
 fn render_spread_text(paragraphs: &[&crate::model::SourceParagraph]) -> String {
@@ -401,6 +881,7 @@ mod tests {
     use super::*;
     use crate::assets::AssetRecord;
     use crate::flow;
+    use crate::model::SourceParagraph;
     use std::fs;
 
     #[test]
@@ -570,12 +1051,67 @@ mod tests {
         .unwrap();
 
         let manifest = fs::read_to_string(output.join("spreads/001-opening/spread.yaml")).unwrap();
-        assert!(manifest.contains("schema: compositor.dev/resolved-spread/v2"));
+        assert!(manifest.contains("schema: compositor.dev/resolved-spread/v3"));
+        assert!(manifest.contains("paragraph_economy:"));
         assert!(manifest.contains("height_percent: 25"));
         assert!(manifest.contains("width_in: 16.0"));
         assert!(manifest.contains("height_in: 2.5"));
         assert!(manifest.contains("aspect_ratio: 6.4"));
         assert!(manifest.contains("width_px: 4800"));
         assert!(manifest.contains("height_px: 750"));
+    }
+
+    #[test]
+    fn paragraph_economy_flags_fragmentation_and_honors_a_waiver() {
+        let paragraphs = (0..16)
+            .map(|ordinal| SourceParagraph {
+                ordinal,
+                source_start: 0,
+                source_end: 0,
+                content: "One small beat.".into(),
+                word_count: 5,
+                id: Some(format!("paragraph-{ordinal}")),
+                id_comment_start: None,
+            })
+            .collect::<Vec<_>>();
+        let references = paragraphs.iter().collect::<Vec<_>>();
+        let config = ParagraphEconomyConfig {
+            minimum_words: 80,
+            max_paragraphs_per_100_words: 12.0,
+            short_paragraph_max_words: 12,
+            max_consecutive_short_paragraphs: 5,
+        };
+
+        let warning = paragraph_economy_metrics(&references, Some(&config), false);
+        assert_eq!(warning.paragraph_count, 16);
+        assert_eq!(warning.short_paragraph_count, 16);
+        assert_eq!(warning.longest_short_paragraph_run, 16);
+        assert_eq!(warning.status, ParagraphEconomyStatus::Warning);
+
+        let waived = paragraph_economy_metrics(&references, Some(&config), true);
+        assert_eq!(waived.status, ParagraphEconomyStatus::Waived);
+
+        let short_spread = references.iter().take(15).copied().collect::<Vec<_>>();
+        assert_eq!(
+            paragraph_economy_metrics(&short_spread, Some(&config), false).status,
+            ParagraphEconomyStatus::Ok
+        );
+
+        let threshold_paragraphs = (0..12)
+            .map(|ordinal| SourceParagraph {
+                ordinal,
+                source_start: 0,
+                source_end: 0,
+                content: "A deliberate beat.".into(),
+                word_count: if ordinal < 8 { 8 } else { 9 },
+                id: Some(format!("threshold-{ordinal}")),
+                id_comment_start: None,
+            })
+            .collect::<Vec<_>>();
+        let threshold_references = threshold_paragraphs.iter().collect::<Vec<_>>();
+        assert_eq!(
+            paragraph_economy_metrics(&threshold_references, Some(&config), false).status,
+            ParagraphEconomyStatus::Ok
+        );
     }
 }

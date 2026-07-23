@@ -19,6 +19,7 @@ pub struct Config {
     pub book: BookConfig,
     pub art_layout: ArtLayoutConfig,
     pub pagination: PaginationConfig,
+    pub editorial: EditorialConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,19 @@ pub struct PaginationConfig {
     pub maximum_words_per_text_page: usize,
     pub story_starts_on_recto: bool,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EditorialConfig {
+    pub paragraph_economy: Option<ParagraphEconomyConfig>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParagraphEconomyConfig {
+    pub minimum_words: usize,
+    pub max_paragraphs_per_100_words: f64,
+    pub short_paragraph_max_words: usize,
+    pub max_consecutive_short_paragraphs: usize,
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -101,6 +115,7 @@ impl Default for Config {
             book: BookConfig::default(),
             art_layout: ArtLayoutConfig::default(),
             pagination: PaginationConfig::default(),
+            editorial: EditorialConfig::default(),
         }
     }
 }
@@ -245,6 +260,17 @@ impl Config {
             return Err(AppError::config(
                 "art_layout pixels per inch must be positive, the spread gutter must not be negative, and the minimum landscape aspect ratio must be greater than 1".into(),
             ));
+        }
+        if let Some(economy) = &self.editorial.paragraph_economy {
+            if economy.minimum_words == 0
+                || economy.max_paragraphs_per_100_words <= 0.0
+                || economy.short_paragraph_max_words == 0
+                || economy.max_consecutive_short_paragraphs == 0
+            {
+                return Err(AppError::config(
+                    "editorial.paragraph_economy values must all be greater than zero".into(),
+                ));
+            }
         }
         Ok(())
     }

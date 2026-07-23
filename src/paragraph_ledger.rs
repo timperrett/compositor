@@ -206,10 +206,8 @@ fn reconcile_exact(
     parsed: &ParsedDocument,
 ) -> Result<(), AppError> {
     if ledger.paragraphs.len() != parsed.paragraphs.len() {
-        return Err(AppError::config(format!(
-            "paragraph count changed in {}; use `compositor source resolve`",
-            story.display()
-        )));
+        reconcile_count_change(ledger, parsed)?;
+        return Ok(());
     }
     let current = parsed
         .paragraphs
@@ -274,6 +272,74 @@ fn reconcile_exact(
     Ok(())
 }
 
+/// Reconcile an editorial merge, split, insertion, or deletion without
+/// pretending that altered paragraphs retain a durable identity. Exact
+/// paragraphs preserve their IDs; unmatched current paragraphs receive new,
+/// content-derived IDs, and removed ledger records disappear. Flow validation
+/// subsequently requires any affected range to be reviewed explicitly.
+fn reconcile_count_change(
+    ledger: &mut ParagraphLedger,
+    parsed: &ParsedDocument,
+) -> Result<(), AppError> {
+    let current = parsed
+        .paragraphs
+        .iter()
+        .map(|paragraph| paragraph_fingerprint(&paragraph.content))
+        .collect::<Vec<_>>();
+    let mut locations = BTreeMap::<String, Vec<usize>>::new();
+    for (index, fingerprint) in current.iter().enumerate() {
+        locations
+            .entry(fingerprint.clone())
+            .or_default()
+            .push(index);
+    }
+    let mut reconciled = vec![None; current.len()];
+    for entry in ledger.paragraphs.iter().cloned() {
+        let Some(indices) = locations.get(&entry.content_hash) else {
+            continue;
+        };
+        let index = if indices.len() == 1 {
+            indices[0]
+        } else if let Some(index) = contextual_match(&entry, &current) {
+            index
+        } else {
+            return Err(AppError::config(format!(
+                "ambiguous unchanged paragraph `{}` after count change; use `compositor source resolve`",
+                entry.id
+            )));
+        };
+        if reconciled[index].is_some() {
+            return Err(AppError::config(format!(
+                "ambiguous unchanged paragraph `{}` after count change; use `compositor source resolve`",
+                entry.id
+            )));
+        }
+        reconciled[index] = Some(entry);
+    }
+    let mut used = reconciled
+        .iter()
+        .filter_map(|entry| entry.as_ref().map(|entry| entry.id.clone()))
+        .collect::<BTreeSet<_>>();
+    for (index, paragraph) in parsed.paragraphs.iter().enumerate() {
+        if reconciled[index].is_none() {
+            reconciled[index] = Some(LedgerParagraph {
+                id: generated_id(&ledger.story.id, &paragraph.content, &mut used),
+                content_hash: current[index].clone(),
+                before_hash: None,
+                after_hash: None,
+            });
+        }
+    }
+    ledger.paragraphs = reconciled
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            AppError::config("could not reconcile paragraph identities after count change".into())
+        })?;
+    refresh_context(ledger, parsed);
+    Ok(())
+}
+
 fn contextual_match(entry: &LedgerParagraph, current: &[String]) -> Option<usize> {
     let matches = current
         .iter()
@@ -324,27 +390,26 @@ fn refresh_context(ledger: &mut ParagraphLedger, parsed: &ParsedDocument) {
 fn assign_new_ids(story_id: &str, parsed: &mut ParsedDocument) {
     let mut used = BTreeSet::new();
     for paragraph in &mut parsed.paragraphs {
-        let words = paragraph
-            .content
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .take(8)
-            .map(str::to_ascii_lowercase)
-            .collect::<Vec<_>>();
-        let mut id = format!("{}-{}", story_id, words.join("-"));
-        if words.is_empty() {
-            id.push_str("paragraph");
-        }
-        if !used.insert(id.clone()) {
-            id = format!(
-                "{}-{}",
-                id,
-                &paragraph_fingerprint(&paragraph.content)[7..15]
-            );
-            used.insert(id.clone());
-        }
-        paragraph.id = Some(id);
+        paragraph.id = Some(generated_id(story_id, &paragraph.content, &mut used));
     }
+}
+
+fn generated_id(story_id: &str, content: &str, used: &mut BTreeSet<String>) -> String {
+    let words = content
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(8)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let mut id = format!("{}-{}", story_id, words.join("-"));
+    if words.is_empty() {
+        id.push_str("paragraph");
+    }
+    if !used.insert(id.clone()) {
+        id = format!("{}-{}", id, &paragraph_fingerprint(content)[7..15]);
+        used.insert(id.clone());
+    }
+    id
 }
 
 fn strip_inline_comments(source: &str) -> String {
@@ -460,5 +525,29 @@ mod tests {
             parsed.paragraphs[1].id.as_deref(),
             Some(ledger.paragraphs[1].id.as_str())
         );
+    }
+
+    #[test]
+    fn count_changing_compaction_preserves_exact_neighbors_and_assigns_new_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let story = directory.path().join("story.md");
+        fs::write(
+            &story,
+            "---\nid: ledger-test\ntitle: Ledger Test\n---\n\nFirst paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n",
+        )
+        .unwrap();
+        let original = sync(&story, true).unwrap();
+        fs::write(
+            &story,
+            "---\nid: ledger-test\ntitle: Ledger Test\n---\n\nFirst paragraph. Second paragraph.\n\nThird paragraph.\n",
+        )
+        .unwrap();
+
+        let reconciled = sync(&story, true).unwrap();
+        assert_eq!(reconciled.paragraphs.len(), 2);
+        assert_ne!(reconciled.paragraphs[0].id, original.paragraphs[0].id);
+        assert_eq!(reconciled.paragraphs[1].id, original.paragraphs[2].id);
+        let parsed = load_document(&story).unwrap();
+        assert_eq!(parsed.paragraphs.len(), 2);
     }
 }

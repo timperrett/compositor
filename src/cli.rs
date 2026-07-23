@@ -247,6 +247,16 @@ enum Command {
         #[arg(long)]
         design_system: PathBuf,
     },
+    /// Verify that a delivery package matches the current manuscript and plans.
+    ///
+    /// Example: `compositor validate-package output/packages/my-book/r001/my-story --strict`
+    ValidatePackage {
+        /// Package directory containing manifest.yaml.
+        package: PathBuf,
+        /// Treat advisory paragraph-economy findings as validation failures.
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -564,6 +574,22 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                 Err(AppError::Blocking(
                     "validation contains blocking issues".into(),
                 ))
+            } else {
+                Err(AppError::Validation)
+            }
+        }
+        Command::ValidatePackage { package, strict } => {
+            let (output, report) = crate::package::validate_package(root, &config, &package)?;
+            print_report(format, "validate-package", output, report.clone())?;
+            if strict
+                && report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.severity == crate::model::Severity::Warning)
+            {
+                Err(AppError::Validation)
+            } else if report.can_proceed() {
+                Ok(())
             } else {
                 Err(AppError::Validation)
             }

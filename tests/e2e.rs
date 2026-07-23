@@ -1096,6 +1096,229 @@ fn package_build_uses_conventional_story_inputs_and_auto_revisions() {
 }
 
 #[test]
+fn package_validation_detects_stale_text_flow_and_composition() {
+    let directory = package_project();
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let root = directory.path().to_str().unwrap();
+    let build = Command::new(binary)
+        .args(["--root", root, "build", "magic", "first"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let package = directory.path().join("output/packages/magic/r01/01-first");
+
+    let fresh = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        fresh.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh.stderr)
+    );
+
+    let manifest = package.join("manifest.yaml");
+    let manifest_text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        manifest_text.replacen(
+            "source_revision: sha256:",
+            "source_revision: stale-sha256:",
+            1,
+        ),
+    )
+    .unwrap();
+    let stale_source = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale_source.status.success());
+    assert!(String::from_utf8_lossy(&stale_source.stdout).contains("PACKAGE_SOURCE_STALE"));
+    fs::write(&manifest, manifest_text).unwrap();
+
+    let text = package.join("spreads/001-opening/text.txt");
+    fs::write(&text, "Changed package text.\n").unwrap();
+    let stale_text = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale_text.status.success());
+    assert!(String::from_utf8_lossy(&stale_text.stdout).contains("PACKAGE_TEXT_STALE"));
+
+    let flow = directory
+        .path()
+        .join("compendiums/01-magic/01-first/story.flow.yaml");
+    let flow_text = fs::read_to_string(&flow).unwrap();
+    fs::write(
+        &flow,
+        flow_text.replacen("role: opening", "role: reveal", 1),
+    )
+    .unwrap();
+    let stale_flow = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale_flow.status.success());
+    assert!(String::from_utf8_lossy(&stale_flow.stdout).contains("PACKAGE_FLOW_STALE"));
+    fs::write(&flow, flow_text).unwrap();
+
+    let composition = directory
+        .path()
+        .join("compendiums/01-magic/01-first/hardcover.composition.yaml");
+    let composition_text = fs::read_to_string(&composition).unwrap();
+    fs::write(
+        &composition,
+        composition_text.replacen("density: standard", "density: dense", 1),
+    )
+    .unwrap();
+    let stale_composition = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale_composition.status.success());
+    assert!(
+        String::from_utf8_lossy(&stale_composition.stdout).contains("PACKAGE_COMPOSITION_STALE")
+    );
+}
+
+#[test]
+fn package_validation_makes_fragmentation_advisory_strict_or_waived() {
+    let directory = package_project();
+    fs::write(
+        directory.path().join("compositor.toml"),
+        format!(
+            "{DEFAULT_CONFIG}\n[editorial.paragraph_economy]\nminimum_words = 80\nmax_paragraphs_per_100_words = 12.0\nshort_paragraph_max_words = 12\nmax_consecutive_short_paragraphs = 5\n"
+        ),
+    )
+    .unwrap();
+    let story_path = directory
+        .path()
+        .join("compendiums/01-magic/01-first/story.md");
+    let paragraphs = (0..16)
+        .map(|ordinal| format!("<!-- paragraph: first-{ordinal} -->\n\nOne small beat is here."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    fs::write(
+        &story_path,
+        format!("---\nid: first\ntitle: First\n---\n<!-- anchor: opening -->\n\n{paragraphs}\n"),
+    )
+    .unwrap();
+    let story = compositor::flow::load_story(&story_path).unwrap();
+    let flow_path = directory
+        .path()
+        .join("compendiums/01-magic/01-first/story.flow.yaml");
+    let flow = format!(
+        "schema: compositor.dev/story-flow/v1\nstory:\n  id: first\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: first-0 }}\n      through: {{ type: paragraph, id: first-15 }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n",
+        story.source_hash
+    );
+    fs::write(&flow_path, &flow).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    let root = directory.path().to_str().unwrap();
+    let build = Command::new(binary)
+        .args(["--root", root, "build", "magic", "first"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let package = directory.path().join("output/packages/magic/r01/01-first");
+
+    let advisory = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(advisory.status.success());
+    assert!(
+        String::from_utf8_lossy(&advisory.stdout).contains("PARAGRAPH_ECONOMY_FRAGMENTED"),
+        "{}",
+        String::from_utf8_lossy(&advisory.stdout)
+    );
+    let strict = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            package.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert!(!strict.status.success());
+    assert!(String::from_utf8_lossy(&strict.stdout).contains("PARAGRAPH_ECONOMY_FRAGMENTED"));
+
+    fs::write(
+        &flow_path,
+        format!(
+            "{flow}notes:\n  - code: INTENTIONAL_PARAGRAPH_FRAGMENTATION\n    severity: info\n    spread: spread-001\n    message: The deliberate beats support a read-aloud refrain.\n"
+        ),
+    )
+    .unwrap();
+    let rebuilt = Command::new(binary)
+        .args(["--root", root, "build", "magic", "first"])
+        .output()
+        .unwrap();
+    assert!(
+        rebuilt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuilt.stderr)
+    );
+    let waived_package = directory.path().join("output/packages/magic/r02/01-first");
+    let waived = Command::new(binary)
+        .args([
+            "--root",
+            root,
+            "validate-package",
+            waived_package.to_str().unwrap(),
+            "--strict",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        waived.status.success(),
+        "{}",
+        String::from_utf8_lossy(&waived.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&waived.stdout).contains("PARAGRAPH_ECONOMY_FRAGMENTED"));
+}
+
+#[test]
 fn flat_story_sources_are_rejected_after_the_layout_cutover() {
     let directory = project();
     fs::write(
