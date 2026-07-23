@@ -201,11 +201,19 @@ enum Command {
     Status,
     /// Display compendiums, stories, and optionally their art IDs as a tree.
     ///
-    /// Example: `compositor tree --art`
+    /// Examples:
+    /// `compositor tree --art`
+    ///
+    /// `compositor tree my-story --spreads`
     Tree {
+        /// Limit the tree to one story ID.
+        story: Option<String>,
         /// Include art IDs from story-linked art briefs.
         #[arg(long)]
         art: bool,
+        /// List every Flow spread with art mapped by briefs and the hardcover Composition Plan.
+        #[arg(long, requires = "story")]
+        spreads: bool,
     },
     /// Validate authored Markdown and generated production state.
     ///
@@ -594,9 +602,13 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
                 Err(AppError::Validation)
             }
         }
-        Command::Tree { art } => {
-            let project = discover(root, &config)?;
-            tree_command(root, &project, art, format)
+        Command::Tree {
+            story,
+            art,
+            spreads,
+        } => {
+            let project = filtered_project(discover(root, &config)?, story.as_deref())?;
+            tree_command(root, &project, art, spreads, format)
         }
         Command::Status => {
             let prepared = build::prepare(root, &config)?;
@@ -758,6 +770,15 @@ struct TreeStory {
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     art_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spreads: Option<Vec<TreeSpread>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TreeSpread {
+    id: String,
+    brief_art_ids: Vec<String>,
+    composition_art_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -770,10 +791,16 @@ fn tree_command(
     root: &Path,
     project: &SourceProject,
     include_art: bool,
+    include_spreads: bool,
     format: OutputFormat,
 ) -> Result<(), AppError> {
     let art_by_story = if include_art {
         art_ids_by_story(root)?
+    } else {
+        BTreeMap::new()
+    };
+    let spreads_by_story = if include_spreads {
+        spread_art_by_story(root, project)?
     } else {
         BTreeMap::new()
     };
@@ -792,6 +819,8 @@ fn tree_command(
                         title: story.title.clone(),
                         art_ids: include_art
                             .then(|| art_by_story.get(&story.id).cloned().unwrap_or_default()),
+                        spreads: include_spreads
+                            .then(|| spreads_by_story.get(&story.id).cloned().unwrap_or_default()),
                     })
                     .collect(),
             })
@@ -805,6 +834,78 @@ fn tree_command(
         }
         OutputFormat::Json => print_report(format, "tree", output, ValidationReport::default()),
     }
+}
+
+fn spread_art_by_story(
+    root: &Path,
+    project: &SourceProject,
+) -> Result<BTreeMap<String, Vec<TreeSpread>>, AppError> {
+    let mut briefs_by_story = BTreeMap::<String, BTreeMap<String, Vec<String>>>::new();
+    for id in art_brief::ids(root)? {
+        let Some(brief) = art_brief::load(root, &id)? else {
+            continue;
+        };
+        if brief.usage != art_brief::ArtUsage::Story {
+            continue;
+        }
+        for spread_id in &brief.source.spread_ids {
+            briefs_by_story
+                .entry(brief.source.story_id.clone())
+                .or_default()
+                .entry(spread_id.clone())
+                .or_default()
+                .push(brief.art_id.clone());
+        }
+    }
+    for spreads in briefs_by_story.values_mut() {
+        for art_ids in spreads.values_mut() {
+            art_ids.sort();
+        }
+    }
+
+    let mut output = BTreeMap::new();
+    for story in project
+        .compendiums
+        .iter()
+        .flat_map(|compendium| &compendium.stories)
+    {
+        let story_path = root.join(&story.source);
+        let directory = story_path.parent().ok_or_else(|| {
+            AppError::command(format!("story has no parent directory: {}", story.source))
+        })?;
+        let flow = flow::load_plan(&directory.join("story.flow.yaml"))?;
+        let composition = composition::load_plan(&directory.join("hardcover.composition.yaml"))?;
+        let briefs = briefs_by_story.get(&story.id);
+        let spreads = flow
+            .spreads
+            .iter()
+            .map(|flow_spread| {
+                let mut composition_art_ids = composition
+                    .spreads
+                    .iter()
+                    .find(|spread| spread.id == flow_spread.id)
+                    .map(|spread| {
+                        spread
+                            .art_assets
+                            .iter()
+                            .map(|asset| asset.id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                composition_art_ids.sort();
+                TreeSpread {
+                    id: flow_spread.id.clone(),
+                    brief_art_ids: briefs
+                        .and_then(|spreads| spreads.get(&flow_spread.id))
+                        .cloned()
+                        .unwrap_or_default(),
+                    composition_art_ids,
+                }
+            })
+            .collect();
+        output.insert(story.id.clone(), spreads);
+    }
+    Ok(output)
 }
 
 fn art_ids_by_story(root: &Path) -> Result<BTreeMap<String, Vec<String>>, AppError> {
@@ -846,6 +947,27 @@ fn render_tree(output: &TreeOutput) -> String {
                                 label: format!("art: {id}"),
                                 children: Vec::new(),
                             })
+                            .chain(story.spreads.as_deref().unwrap_or_default().iter().map(
+                                |spread| {
+                                    TreeNode {
+                                        label: format!("spread: {}", spread.id),
+                                        children: spread
+                                            .brief_art_ids
+                                            .iter()
+                                            .map(|id| TreeNode {
+                                                label: format!("brief: {id}"),
+                                                children: Vec::new(),
+                                            })
+                                            .chain(spread.composition_art_ids.iter().map(|id| {
+                                                TreeNode {
+                                                    label: format!("composition: {id}"),
+                                                    children: Vec::new(),
+                                                }
+                                            }))
+                                            .collect(),
+                                    }
+                                },
+                            ))
                             .collect(),
                     })
                     .collect(),

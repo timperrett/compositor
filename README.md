@@ -25,7 +25,9 @@ reports.
 
 `tree` prints the ordered compendium and story catalog as `title [id]`, which
 makes story IDs easy to find. Add `--art` to nest art IDs from the corresponding
-story briefs beneath each story.
+story briefs beneath each story. Use `compositor tree <story-id> --spreads` to
+list every Flow spread for one story, with separately labelled mappings from
+art briefs and its conventional `hardcover.composition.yaml`.
 
 `inspect <story.md>` reports durable prose-paragraph identifiers and the source
 revision needed by a Story Flow Plan. `validate-flow <story.md> <story.flow.yaml>

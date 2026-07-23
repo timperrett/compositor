@@ -93,6 +93,119 @@ fn cli_tree_lists_ordered_compendiums_stories_and_optional_art_ids() {
         output["data"]["compendiums"][0]["stories"][0]["art_ids"],
         serde_json::json!(["first-opener"])
     );
+
+    let first = directory.path().join("compendiums/01-magic/01-first");
+    let story = compositor::flow::load_story(&first.join("story.md")).unwrap();
+    fs::write(
+        first.join("story.flow.yaml"),
+        format!(
+            "schema: compositor.dev/story-flow/v1\nstory:\n  id: first\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: first-opening }}\n      through: {{ type: paragraph, id: first-opening }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n  - id: spread-002\n    source:\n      from: {{ type: paragraph, id: first-opening }}\n      through: {{ type: paragraph, id: first-opening }}\n    role: discovery\n    energy: 2\n    narrative: {{ purpose: Discover something. }}\n  - id: spread-003\n    source:\n      from: {{ type: paragraph, id: first-opening }}\n      through: {{ type: paragraph, id: first-opening }}\n    role: quiet\n    energy: 1\n    narrative: {{ purpose: Pause. }}\n",
+            story.source_hash
+        ),
+    )
+    .unwrap();
+    fs::write(
+        first.join("hardcover.composition.yaml"),
+        "schema: compositor.dev/composition-plan/v2\nstory:\n  id: first\n  flow: story.flow.yaml\nedition:\n  id: hardcover\n  design_system: edgar-v1\nopener:\n  title: First\n  placement: center-page\n  art: { id: first-opener, role: primary-subject }\nspreads:\n  - id: spread-001\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n    art_assets:\n      - { id: first-composition-only, role: primary-subject }\n      - { id: first-shared, role: primary-subject }\n  - id: spread-002\n    layout: { family: text, variant: standard }\n    text: { density: standard }\n    illustration: { mode: none, focal_subject: none }\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/first-brief-only.yaml"),
+        "schema_version: 2\nart_id: first-brief-only\nsource:\n  story_id: first\n  anchor_id: opening\n  spread_ids: [spread-001]\ngeneration:\n  page_treatment: floating\n  prompt: Brief-only art.\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/first-shared.yaml"),
+        "schema_version: 2\nart_id: first-shared\nsource:\n  story_id: first\n  anchor_id: opening\n  spread_ids: [spread-001]\ngeneration:\n  page_treatment: floating\n  prompt: Shared art.\n",
+    )
+    .unwrap();
+
+    let spreads = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "tree",
+            "first",
+            "--spreads",
+        ])
+        .output()
+        .unwrap();
+    assert!(spreads.status.success(), "{:?}", spreads);
+    assert_eq!(
+        String::from_utf8(spreads.stdout).unwrap(),
+        concat!(
+            "compendiums\n",
+            "└── Magic [magic]\n",
+            "    └── First [first]\n",
+            "        ├── spread: spread-001\n",
+            "        │   ├── brief: first-brief-only\n",
+            "        │   ├── brief: first-shared\n",
+            "        │   ├── composition: first-composition-only\n",
+            "        │   └── composition: first-shared\n",
+            "        ├── spread: spread-002\n",
+            "        └── spread: spread-003\n",
+        )
+    );
+
+    let spreads_json = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "tree",
+            "first",
+            "--spreads",
+        ])
+        .output()
+        .unwrap();
+    assert!(spreads_json.status.success());
+    let output: serde_json::Value = serde_json::from_slice(&spreads_json.stdout).unwrap();
+    assert_eq!(
+        output["data"]["compendiums"][0]["stories"][0]["spreads"],
+        serde_json::json!([
+            {
+                "id": "spread-001",
+                "brief_art_ids": ["first-brief-only", "first-shared"],
+                "composition_art_ids": ["first-composition-only", "first-shared"]
+            },
+            {
+                "id": "spread-002",
+                "brief_art_ids": [],
+                "composition_art_ids": []
+            },
+            {
+                "id": "spread-003",
+                "brief_art_ids": [],
+                "composition_art_ids": []
+            }
+        ])
+    );
+
+    let unknown = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "tree",
+            "missing",
+            "--spreads",
+        ])
+        .output()
+        .unwrap();
+    assert!(!unknown.status.success());
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown story `missing`"));
+
+    let missing_story = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "tree",
+            "--spreads",
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing_story.status.success());
+    assert!(String::from_utf8_lossy(&missing_story.stderr).contains("--spreads"));
 }
 
 fn project() -> tempfile::TempDir {
