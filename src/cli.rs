@@ -1,14 +1,12 @@
 use crate::art_brief;
-use crate::build;
 use crate::config::{Config, DEFAULT_CONFIG};
 use crate::discovery::discover;
 use crate::flow;
-use crate::model::{ChangeSet, SourceProject, ValidationReport};
-use crate::proof;
+use crate::model::{SourceProject, ValidationReport};
 use crate::report::{self, OutputFormat};
 use crate::storage;
 use crate::validation;
-use crate::{assets, composition, overrides, package};
+use crate::{assets, composition, package};
 use crate::{project_root, AppError};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -20,15 +18,13 @@ use std::path::{Path, PathBuf};
 mod art_commands;
 #[path = "cli_build_commands.rs"]
 mod build_commands;
-#[path = "cli_proof_command.rs"]
-mod proof_command;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "compositor",
     version = crate::BUILD_VERSION,
     about = "Deterministic Markdown-to-book production tooling",
-    after_help = "Common workflows:\n  compositor init\n      Create the project directories and starter compositor.toml.\n  compositor validate\n      Check authored Markdown and generated state for blocking issues.\n  compositor build --mode conservative\n      Rebuild production state while preserving unaffected assignments.\n  compositor proof\n      Write HTML proofs to output/proofs/ for editorial review.\n  compositor build <compendium> [story]\n      Create a delivery package from the conventional Flow and Composition files.\n\nRun `compositor help <command>` for command-specific guidance, or\n`compositor help art <command>` for an artwork workflow."
+    after_help = "Common workflow:\n  compositor validate\n      Check Markdown source and reject unsupported legacy state.\n  compositor build <compendium> [story]\n      Create a revisioned Flow/Composition delivery package and HTML assembly guide.\n\nRun `compositor help <command>` for command-specific guidance."
 )]
 struct Cli {
     /// Project directory to read and write. Defaults to the current directory.
@@ -44,37 +40,18 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 #[command(verbatim_doc_comment)]
 enum Command {
-    /// Approve a generated artifact revision for downstream use.
-    ///
-    /// Example: `compositor approve plan my-story v001`
-    Approve {
-        /// Kind of artifact to approve. Currently only `plan` is supported.
-        kind: ApprovalKind,
-        /// Story or artifact ID whose revision should be approved.
-        id: String,
-        /// Revision to approve, for example `v001`.
-        revision: String,
-    },
     /// Inspect and manage artwork requirements, briefs, candidates, and assets.
     Art {
         #[command(subcommand)]
         command: ArtCommand,
     },
-    /// Build production state or create a conventional delivery package.
-    ///
-    /// Without a compendium target, this updates `.compositor/` production
-    /// state. With a compendium target, it packages the selected story or all
-    /// stories using `story.md`, `story.flow.yaml`, and the edition Composition
-    /// Plan found beside the manuscript.
+    /// Create a conventional Flow/Composition delivery package.
     ///
     /// Examples:
-    /// `compositor build --mode conservative`
-    ///
     /// `compositor build my-compendium my-story --asset-policy approved --strict-art`
     Build {
-        /// Compendium ID or directory name for a delivery package. When present,
-        /// every story is built unless a package story is supplied.
-        compendium: Option<String>,
+        /// Compendium ID or directory name.
+        compendium: String,
         /// Story ID or directory name within the selected compendium.
         package_story: Option<String>,
         /// Design-system directory to use instead of the plan-derived directory.
@@ -92,36 +69,9 @@ enum Command {
         /// Package destination override; valid only for a single-story package build.
         #[arg(long)]
         output: Option<PathBuf>,
-        /// Production-state planning mode: `conservative`, `rebalance`, or `fresh`.
-        #[arg(long, default_value = "conservative")]
-        mode: String,
-        /// Build production state for one story ID instead of a delivery package.
-        #[arg(long, conflicts_with = "compendium")]
-        story: Option<String>,
-    },
-    /// Diagnose one Flow and Composition Plan pair and report compatibility issues.
-    ///
-    /// Example: `compositor diagnose story.md story.flow.yaml hardcover.composition.yaml --design-system design-systems/print`
-    Diagnose {
-        /// Story Markdown file used as the source of truth.
-        story: PathBuf,
-        /// Story Flow Plan to diagnose against the source.
-        flow: PathBuf,
-        /// Composition Plan to diagnose against the Flow Plan.
-        composition: PathBuf,
-        /// Design-system directory referenced by the Composition Plan.
-        #[arg(long)]
-        design_system: PathBuf,
-    },
-    /// Compare source state or two saved production-plan revisions.
-    ///
-    /// Examples:
-    /// `compositor diff source`
-    ///
-    /// `compositor diff plan my-story v001 v002`
-    Diff {
-        #[command(subcommand)]
-        target: DiffTarget,
+        /// Replace an existing explicit --output directory after validation succeeds.
+        #[arg(long, requires = "output")]
+        replace: bool,
     },
     /// Create the directory layout and starter files for a new project.
     ///
@@ -146,45 +96,6 @@ enum Command {
         #[arg(long)]
         story: Option<String>,
     },
-    /// Build or refresh the production plan for one story.
-    ///
-    /// Example: `compositor plan my-story --mode rebalance`
-    Plan {
-        /// Story ID to plan.
-        story: String,
-        /// Planning mode: `conservative`, `rebalance`, or `fresh`.
-        #[arg(long, default_value = "conservative")]
-        mode: String,
-    },
-    /// Generate HTML proofs for all stories, or one selected story.
-    ///
-    /// Example: `compositor proof --story my-story`
-    Proof {
-        /// Story ID to prove; omit to write each story proof and compendium indexes.
-        #[arg(long)]
-        story: Option<String>,
-    },
-    /// Reconcile a Composition Plan with overrides and write the resolved plan.
-    ///
-    /// Example: `compositor reconcile story.composition.yaml overrides.yaml --output resolved.composition.yaml`
-    Reconcile {
-        /// Composition Plan to reconcile.
-        composition: PathBuf,
-        /// Overrides file containing deliberate editorial adjustments.
-        overrides: PathBuf,
-        /// Output path for the reconciled Composition Plan.
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Record a deliberate manual identity match between two story IDs.
-    ///
-    /// Example: `compositor resolve old-story-id my-story-id`
-    Resolve {
-        /// Previous or automatically generated story ID.
-        old_id: String,
-        /// Stable story ID that should replace or resolve the old ID.
-        new_id: String,
-    },
     /// Synchronize or repair the paragraph ledger for a Flow-ready story.
     ///
     /// Examples:
@@ -195,10 +106,6 @@ enum Command {
         #[command(subcommand)]
         command: SourceCommand,
     },
-    /// Show change detection, active/candidate plans, and artwork requirements.
-    ///
-    /// Example: `compositor status --format json`
-    Status,
     /// Display compendiums, stories, and optionally their art IDs as a tree.
     ///
     /// Examples:
@@ -269,26 +176,6 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 #[command(verbatim_doc_comment)]
-enum DiffTarget {
-    /// Compare two saved plan revisions and write an HTML comparison report.
-    ///
-    /// Example: `compositor diff plan my-story v001 v002`
-    Plan {
-        /// Story ID whose revisions should be compared.
-        story: String,
-        /// Earlier plan revision, for example `v001`.
-        before: String,
-        /// Later plan revision, for example `v002`.
-        after: String,
-    },
-    /// Recompute and report changes between source and the current production state.
-    ///
-    /// Example: `compositor diff source`
-    Source,
-}
-
-#[derive(Debug, Subcommand)]
-#[command(verbatim_doc_comment)]
 enum SourceCommand {
     /// Rebind an unmatched paragraph to an existing durable paragraph ID.
     ///
@@ -315,38 +202,15 @@ enum SourceCommand {
         write: bool,
     },
 }
-#[derive(Debug, Clone, clap::ValueEnum)]
-enum ApprovalKind {
-    Plan,
-}
-
 #[derive(Debug, Subcommand)]
 #[command(verbatim_doc_comment)]
 enum ArtCommand {
-    /// Mark an attached artwork record as approved for production use.
+    /// Approve a reviewed selected candidate and copy it into assets/approved.
     ///
-    /// Example: `compositor art approve-asset lantern-opener`
-    ApproveAsset {
+    /// Example: `compositor art approve lantern-opener`
+    Approve {
         /// Artwork ID from the illustration requirement and art brief.
         art_id: String,
-    },
-    /// Attach approved artwork to an illustration requirement.
-    ///
-    /// Supply a path to an already approved file, or use `--selected` to copy
-    /// the selected candidate from the art brief into `assets/approved/`.
-    ///
-    /// Examples:
-    /// `compositor art attach lantern-opener assets/approved/lantern-opener.png`
-    ///
-    /// `compositor art attach lantern-opener --selected`
-    Attach {
-        /// Artwork ID to attach.
-        art_id: String,
-        /// Approved image path when attaching an existing approved asset.
-        path: Option<PathBuf>,
-        /// Copy the selected candidate into the approved asset directory first.
-        #[arg(long)]
-        selected: bool,
     },
     /// Print the validated YAML art brief for one artwork ID.
     ///
@@ -384,7 +248,7 @@ enum ArtCommand {
         #[arg(long)]
         attempt: u32,
     },
-    /// Show the requirement, brief, candidates, selection, and attachment state.
+    /// Show the current requirement, brief, candidates, and registry lifecycle state.
     ///
     /// Example: `compositor art inspect lantern-opener`
     Inspect {
@@ -399,28 +263,12 @@ enum ArtCommand {
         #[arg(long)]
         story: Option<String>,
     },
-    /// Preview or write migration of legacy Markdown-style art briefs to YAML v2.
-    ///
-    /// Example: `compositor art migrate-briefs --write`
-    MigrateBriefs {
-        /// Rewrite the brief files; without this flag, report the files that would change.
-        #[arg(long)]
-        write: bool,
-    },
     /// Create a registry entry for an artwork requirement.
     ///
     /// Example: `compositor art register lantern-opener`
     Register {
         /// Artwork ID to add to `art/assets.yaml`.
         art_id: String,
-    },
-    /// Preview or write migration of the artwork asset registry.
-    ///
-    /// Example: `compositor art registry --write`
-    Registry {
-        /// Write the migrated registry to `art/assets.yaml`.
-        #[arg(long)]
-        write: bool,
     },
     /// Mark an artwork record as rejected.
     ///
@@ -436,7 +284,7 @@ enum ArtCommand {
         /// Artwork ID ready for human review.
         art_id: String,
     },
-    /// Select one candidate in an art brief without approving or attaching it.
+    /// Select one candidate in an art brief without approving it.
     ///
     /// Example: `compositor art select lantern-opener b --feedback "Use candidate b; preserve the warm window light."`
     Select {
@@ -491,17 +339,6 @@ pub fn run() -> Result<(), AppError> {
             composition: plan,
             design_system,
         } => validate_composition(&root, &story, &flow, &plan, &design_system, cli.format),
-        Command::Diagnose {
-            story,
-            flow,
-            composition: plan,
-            design_system,
-        } => validate_composition(&root, &story, &flow, &plan, &design_system, cli.format),
-        Command::Reconcile {
-            composition: plan,
-            overrides: overrides_path,
-            output,
-        } => reconcile_composition(&plan, &overrides_path, &output, cli.format),
         command => execute(&root, cli.format, command),
     }
 }
@@ -516,7 +353,7 @@ mod tests {
         let cli = Cli::command();
         assert_subcommands_are_alphabetical(&cli);
 
-        for name in ["art", "diff", "source"] {
+        for name in ["art", "source"] {
             let nested = cli
                 .get_subcommands()
                 .find(|command| command.get_name() == name)
@@ -564,10 +401,14 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
         Command::Validate { story, strict } => {
             let project = filtered_project(discover(root, &config)?, story.as_deref())?;
             let mut report = validation::validate(&project);
-            let manifest = storage::load_manifest(root, &config)?;
-            report.issues.extend(
-                validation::validate_state(root, &config, &project, manifest.as_ref()).issues,
-            );
+            if root.join(".compositor").exists() {
+                report.issues.push(crate::model::ValidationIssue {
+                    severity: crate::model::Severity::Blocking,
+                    code: "LEGACY_PRODUCTION_STATE_UNSUPPORTED".into(),
+                    message: "legacy .compositor state is unsupported; preserve it in version control, remove it manually, and rebuild from Flow and Composition plans".into(),
+                    path: ".compositor".into(), story_id: None, unit_id: None,
+                });
+            }
             print_report(format, "validate", report.clone(), report.clone())?;
             if strict
                 && report
@@ -610,45 +451,6 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             let project = filtered_project(discover(root, &config)?, story.as_deref())?;
             tree_command(root, &project, art, spreads, format)
         }
-        Command::Status => {
-            let prepared = build::prepare(root, &config)?;
-            let status = art_commands::status_output(root, &config, &prepared)?;
-            print_report(format, "status", status, prepared.validation)
-        }
-        Command::Diff {
-            target: DiffTarget::Source,
-        } => {
-            let prepared = build::prepare(root, &config)?;
-            print_report(format, "diff source", prepared.changes, prepared.validation)
-        }
-        Command::Diff {
-            target:
-                DiffTarget::Plan {
-                    story,
-                    before,
-                    after,
-                },
-        } => {
-            let before =
-                storage::load_plan_revision(root, &config, &story, parse_revision(&before)?)?;
-            let after =
-                storage::load_plan_revision(root, &config, &story, parse_revision(&after)?)?;
-            let diff = crate::diff::compare_plans(&before, &after);
-            let path = config.output_dir(root).join("reports").join(format!(
-                "{}-v{:03}-v{:03}-plan-diff.html",
-                story, before.revision, after.revision
-            ));
-            storage::write_text_atomic(&path, &crate::diff::render_plan_diff_html(&diff))?;
-            print_report(
-                format,
-                "diff plan",
-                PlanDiffOutput {
-                    diff,
-                    path: relative_path(root, &path),
-                },
-                ValidationReport::default(),
-            )
-        }
         Command::Build {
             compendium,
             package_story,
@@ -657,95 +459,26 @@ fn execute(root: &std::path::Path, format: OutputFormat, command: Command) -> Re
             asset_policy,
             strict_art,
             output,
-            mode,
-            story,
-        } => {
-            if let Some(compendium) = compendium {
-                return build_conventional_packages(
-                    root,
-                    &config,
-                    ConventionalPackageBuildRequest {
-                        compendium_selector: &compendium,
-                        story_selector: package_story.as_deref(),
-                        design_system_override: design_system.as_deref(),
-                        assets_override: assets_path.as_deref(),
-                        output_override: output.as_deref(),
-                        policy: &asset_policy,
-                        strict_art,
-                        format,
-                    },
-                );
-            }
-            if package_story.is_some() {
-                return Err(AppError::command(
-                    "a story package target requires a compendium target".into(),
-                ));
-            }
-            let mode = parse_mode(&mode)?;
-            let (prepared, manifest, plans) =
-                build::build_with_mode(root, &config, story.as_deref(), mode)?;
-            print_report(
+            replace,
+        } => build_conventional_packages(
+            root,
+            &config,
+            ConventionalPackageBuildRequest {
+                compendium_selector: &compendium,
+                story_selector: package_story.as_deref(),
+                design_system_override: design_system.as_deref(),
+                assets_override: assets_path.as_deref(),
+                output_override: output.as_deref(),
+                replace,
+                policy: &asset_policy,
+                strict_art,
                 format,
-                "build",
-                build_commands::BuildOutput {
-                    wrote_manifest_revision: manifest.map(|value| value.revision),
-                    plans: plans
-                        .iter()
-                        .map(|plan| format!("{}:v{:03}", plan.story_id, plan.revision))
-                        .collect(),
-                    text_exports: crate::text::export_paths(root, &config, &prepared.project)
-                        .into_iter()
-                        .map(|path| relative_path(root, &path))
-                        .collect(),
-                    changes: prepared.changes,
-                },
-                prepared.validation,
-            )
-        }
-        Command::Plan { story, mode } => {
-            let mode = parse_mode(&mode)?;
-            let (prepared, manifest, plans) =
-                build::build_with_mode(root, &config, Some(&story), mode)?;
-            print_report(
-                format,
-                "plan",
-                build_commands::BuildOutput {
-                    wrote_manifest_revision: manifest.map(|value| value.revision),
-                    plans: plans
-                        .iter()
-                        .map(|plan| format!("{}:v{:03}", plan.story_id, plan.revision))
-                        .collect(),
-                    text_exports: crate::text::export_paths(root, &config, &prepared.project)
-                        .into_iter()
-                        .map(|path| relative_path(root, &path))
-                        .collect(),
-                    changes: prepared.changes,
-                },
-                prepared.validation,
-            )
-        }
-        Command::Proof { story } => {
-            proof_command::proof_command(root, &config, format, story.as_deref())
-        }
+            },
+        ),
         Command::Art { command } => art_commands::art_command(root, &config, format, command),
-        Command::Approve { kind, id, revision } => {
-            let revision = parse_revision(&revision)?;
-            let file = match kind {
-                ApprovalKind::Plan => storage::approve_plan(root, &config, &id, revision)?,
-            };
-            print_report(format, "approve", file, ValidationReport::default())
-        }
         Command::Inspect { .. }
         | Command::ValidateFlow { .. }
-        | Command::ValidateComposition { .. }
-        | Command::Diagnose { .. }
-        | Command::Reconcile { .. } => unreachable!(),
-        Command::Resolve { old_id, new_id } => {
-            let mut resolutions = storage::load_resolutions(root, &config)?;
-            resolutions.mappings.insert(old_id.clone(), new_id.clone());
-            storage::save_resolutions(root, &config, &resolutions)?;
-            print_report(format, "resolve", resolutions, ValidationReport::default())
-        }
+        | Command::ValidateComposition { .. } => unreachable!(),
         Command::Init { .. } => Err(AppError::command(
             "init is handled before configuration is loaded".into(),
         )),
@@ -995,293 +728,11 @@ fn append_tree_children(rendered: &mut String, prefix: &str, children: &[TreeNod
     }
 }
 
-#[derive(Debug, Serialize)]
-struct PlanDiffOutput {
-    diff: crate::diff::PlanDiff,
-    path: String,
-}
-
 fn relative_path(root: &std::path::Path, path: &std::path::Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-fn parse_revision(value: &str) -> Result<u64, AppError> {
-    value
-        .strip_prefix('v')
-        .unwrap_or(value)
-        .parse()
-        .map_err(|_| AppError::Command(format!("invalid revision `{value}`; use v001")))
-}
-
-fn validate_approved_asset(
-    root: &std::path::Path,
-    config: &Config,
-    path: &std::path::Path,
-) -> Result<String, AppError> {
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    if !candidate.is_file() {
-        return Err(AppError::Command(format!(
-            "approved artwork does not exist: {}",
-            candidate.display()
-        )));
-    }
-    let approved = root
-        .join(&config.assets.approved_directory)
-        .canonicalize()?;
-    let candidate = candidate.canonicalize()?;
-    if !candidate.starts_with(&approved) {
-        return Err(AppError::Command(format!(
-            "approved artwork must be inside {}",
-            approved.display()
-        )));
-    }
-    candidate
-        .strip_prefix(root.canonicalize()?)
-        .map(|value| value.to_string_lossy().replace('\\', "/"))
-        .map_err(|_| AppError::Command("approved artwork must be inside the project root".into()))
-}
-
-fn set_art_relationship(
-    root: &std::path::Path,
-    config: &Config,
-    art_id: &str,
-    brief: Option<String>,
-    artwork: Option<String>,
-) -> Result<(), AppError> {
-    let mut manifest = storage::load_manifest(root, config)?
-        .ok_or_else(|| AppError::Command("no manifest exists; run build first".into()))?;
-    let unit = manifest
-        .stories
-        .values_mut()
-        .flat_map(|story| story.units.iter_mut())
-        .find(|unit| unit.id == art_id)
-        .ok_or_else(|| AppError::Command(format!("unknown art `{art_id}`")))?;
-    if config.markdown.require_anchor_before_approval && unit.anchor.is_none() {
-        return Err(AppError::Blocking(format!(
-            "artwork relationship `{art_id}` requires an explicit anchor"
-        )));
-    }
-    if let Some(brief) = brief {
-        unit.art_brief = Some(brief);
-    }
-    if let Some(artwork) = artwork {
-        unit.approved_art = Some(artwork);
-    }
-    manifest.revision += 1;
-    storage::save_manifest(root, config, &manifest)
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-struct BuildOutput {
-    wrote_manifest_revision: Option<u64>,
-    plans: Vec<String>,
-    text_exports: Vec<String>,
-    changes: ChangeSet,
-}
-
-#[allow(dead_code)]
-fn init(root: &std::path::Path, force: bool, format: OutputFormat) -> Result<(), AppError> {
-    let config_path = root.join("compositor.toml");
-    let readme_path = root.join("README.md");
-    if (config_path.exists() || readme_path.exists()) && !force {
-        return Err(AppError::Command(format!(
-            "{} or {} already exists; use --force to replace generated project files",
-            config_path.display(),
-            readme_path.display()
-        )));
-    }
-    fs::create_dir_all(root.join("compendiums"))?;
-    fs::create_dir_all(root.join("canon"))?;
-    fs::create_dir_all(root.join("assets/references"))?;
-    fs::create_dir_all(root.join("assets/drafts"))?;
-    fs::create_dir_all(root.join("assets/approved"))?;
-    fs::create_dir_all(root.join(".compositor"))?;
-    fs::create_dir_all(root.join(".compositor/state"))?;
-    fs::create_dir_all(root.join(".compositor/plans"))?;
-    fs::create_dir_all(root.join(".compositor/requirements"))?;
-    fs::create_dir_all(root.join(".compositor/layouts"))?;
-    fs::create_dir_all(root.join(".compositor/history"))?;
-    fs::create_dir_all(root.join(".compositor/locks"))?;
-    fs::create_dir_all(root.join("output/reports"))?;
-    fs::create_dir_all(root.join("output/proofs"))?;
-    fs::create_dir_all(root.join("output/text"))?;
-    fs::write(config_path, DEFAULT_CONFIG)?;
-    fs::write(readme_path, PROJECT_README)?;
-    print_report(
-        format,
-        "init",
-        InitOutput {
-            root: root.display().to_string(),
-        },
-        ValidationReport::default(),
-    )
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-struct InitOutput {
-    root: String,
-}
-
-#[allow(dead_code)]
-const PROJECT_README: &str = r#"# Compositor project
-
-This directory is a Compositor project. Write stories in Markdown, then use
-`compositor build` to create deterministic production state and page proofs.
-
-## Directory guide
-
-- `compendiums/` contains the authored books. Each numbered compendium directory
-  has an `index.md` plus numbered story Markdown files. Filename order controls
-  reading order; front-matter `id` values provide stable identities.
-- `canon/` holds optional continuity and style notes for authors and assistants.
-  Compositor leaves these Markdown files unchanged.
-- `assets/references/` stores source reference material; `assets/drafts/` holds
-  in-progress art; `assets/approved/` holds artwork you want to preserve.
-- `.compositor/` is generated state: the current manifest, immutable history,
-  page-plan and illustration-requirement revisions, and
-  any manual identity resolutions. Do not edit it by hand.
-- `output/reports/`, `output/proofs/`, and `output/text/` contain generated
-  review and layout artifacts. HTML proofs are written to `output/proofs/`;
-  plain-text files for import into a layout application are written to
-  `output/text/`. Do not edit generated output as manuscript source.
-
-## Authoring a story
-
-Each story needs YAML front matter with a stable `id` and `title`:
-
-```markdown
----
-id: the-hidden-shelf
-title: The Hidden Shelf
----
-
-Edgar woke before the castle bells.
-
----
-
-<!-- anchor: hidden-shelf-reveal -->
-He found the hidden shelf behind the tapestry.
-```
-
-A top-level `---` creates a content unit. Use anchors for units that need a
-stable external relationship, such as artwork. Optional production directives
-include `art`, `layout`, `keep-with-next`, and `unit`; see `compositor --help`.
-
-## Normal workflow
-
-1. Run `compositor validate` after adding or editing stories.
-2. Run `compositor build --mode conservative` to retain unaffected page
-   assignments. Use `rebalance` or `fresh` only when you explicitly want a
-   complete candidate repagination. It also refreshes plain-text layout exports
-   in `output/text/`.
-3. Run `compositor status --format json` for a machine-readable change report.
-4. Run `compositor proof` to generate HTML proofs.
-
-Art directives and artwork-oriented layouts create an illustration requirement.
-Create a matching skill-authored YAML record at `art/briefs/<art-id>.yaml`; it
-contains the generation prompt, candidates, feedback, and selection. Run
-`compositor art validate --strict` before generation or promotion. Use
-`compositor art list`, `compositor art inspect <art-id>`, and `compositor art
-brief <art-id>` to review artwork state. Promote a selected candidate with
-`compositor art attach <art-id> --selected`; source files and approved artifacts
-are never edited in place by Compositor.
-
-Use `compositor resolve <old-id> <new-id>` only to record a deliberate manual
-identity match that Compositor could not determine automatically.
-
-## Pagination capacity
-
-The `[pagination]` settings in `compositor.toml` determine text-page packing.
-`target_words_per_text_page` is the preferred density; long text units are
-automatically split at the nearest paragraph or sentence boundary within the
-maximum. A word-boundary split is used only when a single sentence exceeds the
-maximum.
-`maximum_words_per_text_page` is the hard cap when combining fragments or
-units (except an explicit `keep-with-next` constraint, which emits a warning).
-A change to either setting (or the recto setting) creates a new page-plan
-revision on the next build without rewriting an unchanged source manifest.
-"#;
-
-#[allow(dead_code)]
-fn proof_command(
-    root: &std::path::Path,
-    config: &Config,
-    format: OutputFormat,
-    story_filter: Option<&str>,
-) -> Result<(), AppError> {
-    let manifest = storage::load_manifest(root, config)?
-        .ok_or_else(|| AppError::Command("no manifest exists; run build first".into()))?;
-    let project = discover(root, config)?;
-    let mut paths = Vec::new();
-    let mut compendium_indexes = Vec::new();
-    for compendium in project.compendiums {
-        let mut compendium_stories = Vec::new();
-        for story in compendium.stories {
-            if story_filter.is_some_and(|filter| filter != story.id) {
-                continue;
-            }
-            let plan = storage::load_active_plan(root, config, &story.id)?
-                .or(storage::load_latest_plan(root, config, &story.id)?)
-                .ok_or_else(|| {
-                    AppError::Command(format!("no plan for {}; run build first", story.id))
-                })?;
-            let manifest_story = manifest.stories.get(&story.id).ok_or_else(|| {
-                AppError::Command(format!("story {} absent from manifest", story.id))
-            })?;
-            let path = config
-                .output_dir(root)
-                .join("proofs")
-                .join(format!("{}.html", story.id));
-            fs::create_dir_all(path.parent().expect("proof parent"))?;
-            fs::write(&path, proof::render_html(&story, &plan, manifest_story))?;
-            compendium_stories.push((story.title.clone(), format!("{}.html", story.id)));
-            paths.push(
-                path.strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        }
-        if story_filter.is_none() && !compendium_stories.is_empty() {
-            let path = config
-                .output_dir(root)
-                .join("proofs")
-                .join(format!("{}-compendium.html", compendium.id));
-            fs::write(
-                &path,
-                proof::render_compendium_html(&compendium.title, &compendium_stories),
-            )?;
-            compendium_indexes.push(relative_path(root, &path));
-        }
-    }
-    if paths.is_empty() {
-        return Err(AppError::Command("no matching stories to prove".into()));
-    }
-    print_report(
-        format,
-        "proof",
-        ProofOutput {
-            stories: paths,
-            compendium_indexes,
-        },
-        ValidationReport::default(),
-    )
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-struct ProofOutput {
-    stories: Vec<String>,
-    compendium_indexes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1351,26 +802,6 @@ fn validate_composition(
     }
 }
 
-fn reconcile_composition(
-    composition_path: &std::path::Path,
-    overrides_path: &std::path::Path,
-    output: &std::path::Path,
-    format: OutputFormat,
-) -> Result<(), AppError> {
-    let plan = composition::load_plan(composition_path)?;
-    let values = overrides::load(overrides_path)?;
-    let (resolved, report) = overrides::reconcile(&plan, &values);
-    if report.can_proceed() {
-        overrides::write(output, &resolved)?;
-    }
-    print_report(format, "reconcile", resolved, report.clone())?;
-    if report.can_proceed() {
-        Ok(())
-    } else {
-        Err(AppError::Validation)
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct PackageBuildOutput {
     revision: Option<String>,
@@ -1387,6 +818,7 @@ struct ConventionalPackageBuildRequest<'a> {
     design_system_override: Option<&'a Path>,
     assets_override: Option<&'a Path>,
     output_override: Option<&'a Path>,
+    replace: bool,
     policy: &'a str,
     strict_art: bool,
     format: OutputFormat,
@@ -1397,6 +829,13 @@ fn build_conventional_packages(
     config: &Config,
     request: ConventionalPackageBuildRequest<'_>,
 ) -> Result<(), AppError> {
+    let legacy_manifest = root.join(".compositor/manifest.json");
+    if legacy_manifest.exists() {
+        return Err(AppError::Blocking(format!(
+            "legacy production state detected at {}; this Flow/Composition-only release will not read or migrate it. Preserve it in version control, remove .compositor, then rebuild from story.flow.yaml and hardcover.composition.yaml",
+            legacy_manifest.display()
+        )));
+    }
     let project = discover(root, config)?;
     let compendium = project
         .compendiums
@@ -1454,6 +893,9 @@ fn build_conventional_packages(
             "--output is only supported when building a single story package".into(),
         ));
     }
+    if request.replace && request.output_override.is_none() {
+        return Err(AppError::command("--replace requires --output".into()));
+    }
     let assets_path = request
         .assets_override
         .map(Path::to_path_buf)
@@ -1508,6 +950,7 @@ fn build_conventional_packages(
                 &design_system,
                 &assets_path,
                 &output,
+                request.replace,
                 request.policy,
                 request.strict_art,
             )?
@@ -1564,6 +1007,7 @@ fn build_package(
     design_system: &Path,
     assets_path: &Path,
     output: &Path,
+    replace: bool,
     policy: &str,
     strict_art: bool,
 ) -> Result<ValidationReport, AppError> {
@@ -1601,33 +1045,13 @@ fn build_package(
         &composition_plan,
         &registry,
         output,
+        replace,
         package::PackagePolicy {
             minimum,
             strict: strict_art,
         },
     )?;
     Ok(validation)
-}
-
-fn inspect_art(
-    root: &std::path::Path,
-    config: &Config,
-    format: OutputFormat,
-    art_id: &str,
-) -> Result<(), AppError> {
-    let requirement = art_commands::required_art_requirement(root, config, art_id)?;
-    let manifest = storage::load_manifest(root, config)?;
-    let unit = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.stories.get(&requirement.story_id))
-        .and_then(|story| story.units.iter().find(|unit| unit.id == art_id));
-    let brief = art_brief::inspect(root, config, art_id);
-    print_report(
-        format,
-        "art inspect",
-        serde_json::json!({ "requirement": requirement, "unit": unit, "brief": brief }),
-        ValidationReport::default(),
-    )
 }
 
 fn filtered_project(
@@ -1653,14 +1077,6 @@ fn filtered_project(
     Ok(project)
 }
 
-fn parse_mode(mode: &str) -> Result<build::BuildMode, AppError> {
-    match mode {
-        "conservative" => Ok(build::BuildMode::Conservative),
-        "rebalance" => Ok(build::BuildMode::Rebalance),
-        "fresh" => Ok(build::BuildMode::Fresh),
-        _ => Err(AppError::Command(format!("unknown build mode `{mode}`"))),
-    }
-}
 fn print_report<T: Serialize + std::fmt::Debug>(
     format: OutputFormat,
     command: &str,

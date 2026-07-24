@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub const ART_BRIEF_VERSION: u32 = 2;
+pub const ART_BRIEF_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -23,7 +23,7 @@ pub struct ArtBrief {
     #[serde(default)]
     pub candidates: Vec<ArtCandidate>,
     #[serde(default)]
-    pub selection: Option<ArtSelection>,
+    pub feedback: Vec<ArtFeedback>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,8 +31,7 @@ pub struct ArtBrief {
 pub struct ArtBriefSource {
     pub story_id: String,
     pub anchor_id: String,
-    /// Narrative Flow Plan spreads represented by this art.  Empty is retained
-    /// for legacy story briefs until they are explicitly mapped.
+    /// Narrative Flow Plan spreads represented by this art.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spread_ids: Vec<String>,
 }
@@ -89,10 +88,9 @@ pub struct ArtCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ArtSelection {
+pub struct ArtFeedback {
     pub candidate_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feedback: Option<String>,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,9 +165,16 @@ pub fn load(root: &Path, art_id: &str) -> Result<Option<ArtBrief>, AppError> {
         return Ok(None);
     }
     let text = fs::read_to_string(&path)?;
-    serde_yaml::from_str(&text)
-        .map(Some)
-        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
+    let brief: ArtBrief = serde_yaml::from_str(&text)
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
+    if brief.schema_version != ART_BRIEF_VERSION {
+        return Err(AppError::command(format!(
+            "{} uses art brief schema {}; run the one-time migration bridge",
+            path.display(),
+            brief.schema_version
+        )));
+    }
+    Ok(Some(brief))
 }
 
 pub fn save(root: &Path, brief: &ArtBrief) -> Result<(), AppError> {
@@ -381,15 +386,15 @@ pub fn validate(root: &Path, config: &Config, brief: &ArtBrief) -> ValidationRep
     for reference in &brief.context.canon_references {
         validate_file(&context, reference, FileRole::CanonReference, &mut report);
     }
-    if let Some(selection) = &brief.selection {
-        if !ids.contains(&selection.candidate_id) {
+    for feedback in &brief.feedback {
+        if !ids.contains(&feedback.candidate_id) {
             push(
                 &mut report,
                 Severity::Error,
-                "unknown_selected_candidate",
+                "unknown_feedback_candidate",
                 format!(
-                    "selection references unknown candidate `{}`",
-                    selection.candidate_id
+                    "feedback references unknown candidate `{}`",
+                    feedback.candidate_id
                 ),
                 &brief_path,
                 Some(&brief.source.story_id),
@@ -579,7 +584,7 @@ mod tests {
     use crate::model::ArtGeometry;
 
     const BRIEF: &str = r#"
-schema_version: 2
+schema_version: 3
 art_id: reveal
 source:
   story_id: story

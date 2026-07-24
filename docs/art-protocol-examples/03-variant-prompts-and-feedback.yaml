@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 art_id: dragon-map-library-discovery
 source:
   story_id: dragon-map-that-wasnt-there
@@ -12,6 +12,6 @@ candidates:
   - id: b
     file: assets/drafts/dragon-map-library-discovery/r01/candidate-b.png
     prompt: Retain the scene but make Edgar smaller against the library shelves.
-selection:
-  candidate_id: a
-  feedback: Keep the scale and candlelight; make Edgar more curious in a later refinement.
+feedback:
+  - candidate_id: a
+    note: Keep the scale and candlelight; make Edgar more curious in a later refinement.

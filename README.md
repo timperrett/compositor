@@ -6,10 +6,9 @@ into incrementally maintained book-production artifacts.
 ## Quick start
 
 ```bash
-cargo run -- init
+compositor init
 # Add compendiums/01-example/index.md and numbered story directories containing story.md.
-cargo run -- build --format json
-cargo run -- proof
+compositor build example-compendium --format json
 ```
 
 Stories use YAML front matter with `id` and `title`. A top-level Markdown
@@ -18,9 +17,9 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 
 ## Commands
 
-`init`, `parse`, `validate`, `tree`, `status`, `build`, `diff source`, `plan`, `proof`,
-`inspect <story.md>`, `source sync`, `source resolve`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
-the conservative mode only. Use `--format json` for stable machine-readable
+`init`, `parse`, `validate`, `tree`, `build`, `inspect <story.md>`,
+`source sync`, `source resolve`, and `validate-flow` are available. Use
+`--format json` for stable machine-readable
 reports.
 
 `tree` prints the ordered compendium and story catalog as `title [id]`, which
@@ -50,7 +49,7 @@ reference only `usage: story` art. Package builds emit the opener under
 
 Use `compositor art coverage --story <story-id> --edition <edition> --format json`
 to inspect the opener separately and identify each narrative spread as covered,
-missing, invalid, or needing a legacy-art mapping. Story art referenced by a
+missing, or invalid. Story art referenced by a
 Composition Plan must declare that spread in `source.spread_ids`.
 
 ## Package builds
@@ -78,18 +77,35 @@ allocated automatically (`r01`, then `r02`, and so on); a multi-story build
 shares one revision. Use `--output` only when a single story needs a
 non-conventional destination.
 
-Generated state lives in `.compositor/`; HTML proofs are written to
-`output/proofs/`; layout-ready plain-text exports are written to `output/text/`
-on every successful build. Both story-level and compendium-level `.txt` files
-are fully generated for import into a layout application. Normal commands never
-modify source Markdown or assets.
+Every package includes `assembly-guide.html`, an HTML review surface for the
+resolved opener and spreads. Existing `.compositor/` state is unsupported: keep
+it in version control, remove it manually, and rebuild from the Flow and
+Composition Plans. Normal commands never modify source Markdown or assets.
+
+## One-time legacy migration
+
+For an existing project, use the standalone bridge before removing legacy state:
+
+```bash
+bash scripts/migrate-legacy-production-state --root /path/to/project
+bash scripts/migrate-legacy-production-state --root /path/to/project --apply
+```
+
+The first command is a dry run and prints the complete mapping report. `--apply`
+only imports unambiguous, current Flow/Composition-linked artwork; it upgrades
+briefs, records verified selections as `review`, copies verified historical
+approvals into `assets/approved/`, and writes a receipt to
+`output/reports/legacy-production-migration.json`. Apply stages its output and
+rolls back published files on failure. It never deletes, renames, or archives
+`.compositor/`; review the receipt and remove that directory manually.
 
 ## Artwork records
 
-Artwork intent, generation prompts, candidates, feedback, and selections live
-in human- and skill-authored YAML files at `art/briefs/<art-id>.yaml`.
-Compositor validates these records against the current illustration requirement
-but does not generate or revise them. See `docs/art-protocol.md` for the v2
-format and complete examples. Use `compositor art validate --strict` before
-generation or promotion, and `compositor art attach <art-id> --selected` to
-copy the selected draft candidate into `assets/approved/`.
+Artwork intent, generation prompts, candidates, and feedback live in human- and
+skill-authored YAML files at `art/briefs/<art-id>.yaml`; `art/assets.yaml` owns
+the selected candidate and approved artifact. Compositor validates these records
+against the current Flow/Composition requirement but does not generate or revise
+them. See `docs/art-protocol.md` for the v3 format and complete examples. Use
+`compositor art validate --strict` before generation or promotion, then
+explicitly `select`, `review`, and `approve` a candidate to copy the pinned asset
+into `assets/approved/`.

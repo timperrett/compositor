@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec cargo run --quiet --manifest-path "$repository_root/Cargo.toml" --bin compositor-migrate -- "$@"

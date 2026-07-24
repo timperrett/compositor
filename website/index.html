@@ -243,7 +243,7 @@
           </li>
           <li class="border-b border-line py-7 pr-6 xl:border-b-0 xl:border-r xl:px-7">
             <span class="step-number">5</span>
-            <h3 class="mt-5 font-display text-2xl">Review, select, approve, attach</h3>
+            <h3 class="mt-5 font-display text-2xl">Select, review, approve</h3>
             <p class="mt-3 text-sm leading-6 text-[#565850]">Editors and art directors make each of these explicit decisions before an asset joins production.</p>
           </li>
           <li class="py-7 xl:pl-7">
@@ -266,10 +266,10 @@
               An art-specification skill can maintain a local YAML record for intent, source linkage, generation direction, candidates, feedback, and selection. Compositor validates its source and asset relationships without pretending validation is a creative judgment.
             </p>
             <ol class="mt-9 flex flex-wrap gap-x-2 gap-y-3 font-mono text-xs font-bold uppercase tracking-[0.12em] text-[#f0c4b0]" aria-label="Artwork lifecycle">
-              <li>Specify</li><li aria-hidden="true">→</li><li>Generate candidates</li><li aria-hidden="true">→</li><li>Review</li><li aria-hidden="true">→</li><li>Select</li><li aria-hidden="true">→</li><li>Approve</li><li aria-hidden="true">→</li><li>Attach</li>
+              <li>Specify</li><li aria-hidden="true">→</li><li>Generate candidates</li><li aria-hidden="true">→</li><li>Select</li><li aria-hidden="true">→</li><li>Review</li><li aria-hidden="true">→</li><li>Approve</li>
             </ol>
             <p class="mt-8 border-t border-[#718170] pt-5 text-sm leading-6 text-[#d8e1d4]">
-              A rendering skill is optional and uses the creative team’s chosen tools to create candidate files. Editors and art directors review them. Selection records a preferred candidate; approval and attachment remain separate, explicit editorial gates. Compositor does not generate or revise images.
+              A rendering skill is optional and uses the creative team’s chosen tools to create candidate files. Editors and art directors select and review them; approval copies and pins the chosen file in the registry. Compositor does not generate or revise images.
             </p>
           </div>
           <figure class="art-frame shadow-[0_18px_42px_rgba(11,20,13,.28)]" aria-labelledby="art-caption">
@@ -301,8 +301,8 @@
               <p class="mt-3 text-sm leading-6 text-[#565850]">Make the editorial decision visible, including rejection or supersession when the work changes direction.</p>
             </article>
             <article class="border-t border-line pt-6 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
-              <p class="font-mono text-xs text-rust">03 · ATTACH</p>
-              <p class="mt-3 text-sm leading-6 text-[#565850]">Connect the approved local asset to the requirement and manifest for the production handoff.</p>
+              <p class="font-mono text-xs text-rust">03 · APPROVE</p>
+              <p class="mt-3 text-sm leading-6 text-[#565850]">Pin the approved local asset in the registry for the production handoff.</p>
             </article>
           </div>
         </div>
@@ -347,16 +347,15 @@
               <p class="font-mono text-xs font-bold uppercase tracking-[0.12em] text-rust">Typical skill session</p>
               <ol class="mt-4 grid gap-3 text-sm leading-6 text-[#4d504a]">
                 <li><strong class="text-ink">1.</strong> A person asks a planning skill to inspect a story and draft structured plans for review.</li>
-                <li><strong class="text-ink">2.</strong> The team validates, reads the diagnostics and proof, then accepts or revises those proposals.</li>
-                <li><strong class="text-ink">3.</strong> When art is needed, separate skills manage candidates while a person reviews, selects, approves, and attaches.</li>
+                <li><strong class="text-ink">2.</strong> The team validates the Flow and Composition Plans, then reads the package assembly guide.</li>
+                <li><strong class="text-ink">3.</strong> When art is needed, separate skills manage candidates while a person selects, reviews, and approves.</li>
                 <li><strong class="text-ink">4.</strong> The team builds a deterministic package and hands it to layout.</li>
               </ol>
             </aside>
             <pre class="code-panel"><code class="block overflow-x-auto p-6 font-mono text-sm leading-7">compositor init
 <span class="text-[#8d9689]"># Add a compendium and story Markdown files.</span>
-compositor build --format json
-compositor proof</code></pre>
-            <p class="mt-5 text-base leading-7 text-[#4d504a]">Use JSON reports in repeatable human or skill-assisted tooling, and open the generated proof when the team needs to review the result.</p>
+compositor build my-compendium --format json</code></pre>
+            <p class="mt-5 text-base leading-7 text-[#4d504a]">Use JSON reports in repeatable human or skill-assisted tooling, and open the package assembly guide when the team needs to review the result.</p>
           </div>
         </div>
       </section>

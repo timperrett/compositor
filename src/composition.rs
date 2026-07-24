@@ -648,7 +648,7 @@ mod tests {
         fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
         fs::write(
             directory.path().join("art/briefs/opener.yaml"),
-            "schema_version: 2\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
+            "schema_version: 3\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
         )
         .unwrap();
         let plan = CompositionPlan {
@@ -704,12 +704,12 @@ mod tests {
         fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
         fs::write(
             directory.path().join("art/briefs/opener.yaml"),
-            "schema_version: 2\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
+            "schema_version: 3\nart_id: opener\nsource: { story_id: story, anchor_id: story-opener }\nusage: opener\ngeneration: { page_treatment: floating, prompt: Quiet opener. }\n",
         )
         .unwrap();
         fs::write(
             directory.path().join("art/briefs/story-art.yaml"),
-            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-002] }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
+            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-002] }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
         )
         .unwrap();
         let mut plan = CompositionPlan {

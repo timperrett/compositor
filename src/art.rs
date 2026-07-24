@@ -1,83 +1,8 @@
-use crate::identity::ResolvedStory;
-use crate::model::{
-    ArtGeometry, ArtLayout, ArtOrientation, ArtSurface, ArtifactStatus, IllustrationRequirement,
-    PageLayout, PagePlan, Story, SCHEMA_VERSION,
-};
-use crate::planning::art_needed;
-use crate::storage;
+use crate::model::{ArtGeometry, ArtLayout, ArtOrientation, ArtSurface};
 use crate::{config::Config, AppError};
+use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
-
-/// Synchronize illustration requirements from a newly-created plan. Art briefs
-/// are external, skill-authored protocol records in `art/briefs/`.
-pub fn sync_requirements(
-    root: &Path,
-    config: &Config,
-    story: &Story,
-    resolved: &ResolvedStory,
-    plan: &PagePlan,
-) -> Result<Vec<IllustrationRequirement>, AppError> {
-    let mut requirements = Vec::new();
-    for (unit, id) in story.units.iter().zip(&resolved.ids) {
-        if !art_needed(unit) {
-            continue;
-        }
-        let pages = plan
-            .assignments
-            .iter()
-            .filter(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
-            .flat_map(|assignment| assignment.pages.iter().copied())
-            .collect::<Vec<_>>();
-        let layout = plan
-            .assignments
-            .iter()
-            .find(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
-            .map(|assignment| assignment.layout)
-            .unwrap_or(PageLayout::TextDominant);
-        let geometry = if let Some(art_layout) = unit.directives.art_layout.as_ref() {
-            validate_layout(config, art_layout).map_err(AppError::command)?;
-            Some(geometry(config, art_layout))
-        } else {
-            None
-        };
-        let previous = storage::load_latest_requirement(root, config, id)?;
-        if let Some(previous) = previous.as_ref() {
-            if previous.story_id == story.id
-                && previous.unit_ids == [id.clone()]
-                && previous.pages == pages
-                && previous.layout == layout
-                && previous.art_note == unit.directives.art
-                && previous.art_layout == unit.directives.art_layout
-                && previous.geometry == geometry
-            {
-                requirements.push(previous.clone());
-                continue;
-            }
-        }
-        let revision = previous
-            .as_ref()
-            .map(|record| record.revision + 1)
-            .unwrap_or(1);
-        let record = IllustrationRequirement {
-            schema_version: SCHEMA_VERSION,
-            art_id: id.clone(),
-            story_id: story.id.clone(),
-            unit_ids: vec![id.clone()],
-            pages,
-            layout,
-            status: ArtifactStatus::NeedsReview,
-            revision,
-            art_layout: unit.directives.art_layout.clone(),
-            geometry,
-            art_note: unit.directives.art.clone(),
-        };
-        storage::save_requirement(root, config, &record)?;
-        requirements.push(record);
-    }
-    Ok(requirements)
-}
 
 pub fn geometry(config: &Config, layout: &ArtLayout) -> ArtGeometry {
     let surface_width_in = match layout.surface {
@@ -134,23 +59,75 @@ pub fn validate_layout(config: &Config, layout: &ArtLayout) -> Result<(), String
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DerivedArtRequirement {
+    pub art_id: String,
+    pub story_id: String,
+    pub anchor_id: Option<String>,
+    pub art_layout: Option<ArtLayout>,
+    pub geometry: Option<ArtGeometry>,
+    pub art_note: Option<String>,
+}
+
 pub fn requirements_for_story(
     root: &Path,
     config: &Config,
     story_id: &str,
-) -> Result<BTreeMap<String, IllustrationRequirement>, AppError> {
-    let base = config.state_dir(root).join("requirements");
-    if !base.is_dir() {
-        return Ok(BTreeMap::new());
-    }
+) -> Result<BTreeMap<String, DerivedArtRequirement>, AppError> {
     let mut output = BTreeMap::new();
-    for entry in fs::read_dir(base)?.filter_map(Result::ok) {
-        let art_id = entry.file_name().to_string_lossy().to_string();
-        if let Some(requirement) = storage::load_latest_requirement(root, config, &art_id)? {
-            if requirement.story_id == story_id {
-                output.insert(art_id, requirement);
-            }
-        }
+    let project = crate::discovery::discover(root, config)?;
+    let story = project
+        .compendiums
+        .iter()
+        .flat_map(|book| &book.stories)
+        .find(|story| story.id == story_id)
+        .ok_or_else(|| AppError::command(format!("unknown story `{story_id}`")))?;
+    let directory = root.join(
+        std::path::Path::new(&story.source)
+            .parent()
+            .ok_or_else(|| AppError::command("story has no parent".into()))?,
+    );
+    let composition_path = directory.join("hardcover.composition.yaml");
+    if !composition_path.is_file() {
+        return Ok(output);
+    }
+    let composition = crate::composition::load_plan(&composition_path)?;
+    let ids = std::iter::once(composition.opener.art.id).chain(
+        composition
+            .spreads
+            .iter()
+            .flat_map(|spread| spread.art_assets.iter().map(|art| art.id.clone())),
+    );
+    for art_id in ids {
+        let anchor = crate::art_brief::load(root, &art_id)?
+            .map(|brief| brief.source.anchor_id)
+            .unwrap_or_else(|| art_id.clone());
+        let unit = story
+            .units
+            .iter()
+            .find(|unit| unit.directives.anchor.as_deref() == Some(anchor.as_str()));
+        let (art_note, art_layout, geometry) = match unit {
+            Some(unit) => (
+                unit.directives.art.clone(),
+                unit.directives.art_layout.clone(),
+                unit.directives
+                    .art_layout
+                    .as_ref()
+                    .map(|layout| geometry(config, layout)),
+            ),
+            None => (None, None, None),
+        };
+        output.insert(
+            art_id.clone(),
+            DerivedArtRequirement {
+                art_id,
+                story_id: story.id.clone(),
+                anchor_id: unit.and_then(|unit| unit.directives.anchor.clone()),
+                art_layout,
+                geometry,
+                art_note,
+            },
+        );
     }
     Ok(output)
 }

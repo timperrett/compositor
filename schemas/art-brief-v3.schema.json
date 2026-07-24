@@ -1,27 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://compositor.dev/schemas/art-brief-v2.schema.json",
-  "title": "Compositor art brief v2",
+  "$id": "https://compositor.dev/schemas/art-brief-v3.schema.json",
+  "title": "Compositor art brief v3",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "art_id", "source", "generation"],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "art_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["story_id", "anchor_id"],
-      "properties": {
-        "story_id": { "type": "string", "minLength": 1 },
-        "anchor_id": { "type": "string", "minLength": 1 },
-        "spread_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
-      }
-    },
+    "source": { "type": "object", "additionalProperties": false, "required": ["story_id", "anchor_id"], "properties": { "story_id": { "type": "string", "minLength": 1 }, "anchor_id": { "type": "string", "minLength": 1 }, "spread_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } } },
     "usage": { "type": "string", "enum": ["story", "opener"] },
     "context": { "type": "object", "additionalProperties": false, "properties": { "art_note": { "type": "string" }, "canon_references": { "type": "array", "items": { "type": "string" } } } },
     "generation": { "type": "object", "additionalProperties": false, "required": ["page_treatment", "prompt"], "properties": { "mode": { "type": "string" }, "page_treatment": { "type": "string", "enum": ["floating", "framed", "full-bleed", "spot"] }, "prompt": { "type": "string", "minLength": 1 }, "exclusions": { "type": "array", "items": { "type": "string" } } } },
     "candidates": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "file"], "properties": { "id": { "type": "string", "minLength": 1 }, "file": { "type": "string", "minLength": 1 }, "prompt": { "type": "string" } } } },
-    "selection": { "type": "object", "additionalProperties": false, "required": ["candidate_id"], "properties": { "candidate_id": { "type": "string", "minLength": 1 }, "feedback": { "type": "string" } } }
+    "feedback": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["candidate_id", "note"], "properties": { "candidate_id": { "type": "string", "minLength": 1 }, "note": { "type": "string", "minLength": 1 } } } }
   }
 }
