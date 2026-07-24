@@ -1,6 +1,6 @@
 use super::*;
 use crate::art_brief::{ArtCandidate, ArtUsage, CandidateGeometry};
-use crate::assets::{AssetRecord, AssetRegistry, AssetStatus};
+use crate::assets::{ApprovedAsset, AssetRecord, AssetRegistry, AssetSelection, AssetStatus};
 use crate::composition::{ArtReference, IllustrationIntent};
 use crate::flow::{SourceRange, StoryFlowPlan};
 use crate::model::Story;
@@ -131,7 +131,7 @@ pub(super) fn art_command(
         ArtCommand::Review { art_id } => {
             transition_asset(root, format, &art_id, AssetStatus::Review)
         }
-        ArtCommand::ApproveAsset { art_id } => approve_asset(root, config, format, &art_id),
+        ArtCommand::Approve { art_id } => approve_asset(root, config, format, &art_id),
         ArtCommand::Reject { art_id } => {
             transition_asset(root, format, &art_id, AssetStatus::Rejected)
         }
@@ -260,73 +260,6 @@ pub(super) fn art_command(
             } else {
                 Ok(())
             }
-        }
-        ArtCommand::Attach {
-            art_id,
-            path,
-            selected,
-        } => {
-            required_art_requirement(root, config, &art_id)?;
-            if selected == path.is_some() {
-                return Err(AppError::Command(
-                    "provide an approved asset path or use --selected".into(),
-                ));
-            }
-            let (relative, brief) = if selected {
-                let inspection = art_brief::inspect(root, config, &art_id);
-                if !inspection.validation.can_proceed() {
-                    return Err(AppError::Validation);
-                }
-                let brief = inspection.brief.ok_or_else(|| {
-                    AppError::Command(format!("no art brief exists for `{art_id}`"))
-                })?;
-                let selected = brief.selection.as_ref().ok_or_else(|| {
-                    AppError::Command(format!("art brief `{art_id}` has no selected candidate"))
-                })?;
-                let candidate = brief
-                    .candidates
-                    .iter()
-                    .find(|candidate| candidate.id == selected.candidate_id)
-                    .ok_or_else(|| {
-                        AppError::Command(format!(
-                            "selected candidate `{}` does not exist",
-                            selected.candidate_id
-                        ))
-                    })?;
-                let source = root.join(&candidate.file);
-                let extension = source
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .unwrap_or("png");
-                let target = root
-                    .join(&config.assets.approved_directory)
-                    .join(format!("{art_id}-{}.{}", candidate.id, extension));
-                if target.exists() {
-                    return Err(AppError::Command(format!(
-                        "approved artwork already exists: {}",
-                        target.display()
-                    )));
-                }
-                let parent = target.parent().ok_or_else(|| {
-                    AppError::command("approved artwork path has no parent directory".into())
-                })?;
-                fs::create_dir_all(parent)?;
-                fs::copy(source, &target)?;
-                (relative_path(root, &target), Some(inspection.path))
-            } else {
-                (
-                    validate_approved_asset(
-                        root,
-                        config,
-                        path.as_ref().ok_or_else(|| {
-                            AppError::command("approved artwork path is required".into())
-                        })?,
-                    )?,
-                    None,
-                )
-            };
-            set_art_relationship(root, config, &art_id, brief, Some(relative.clone()))?;
-            print_report(format, "art attach", relative, ValidationReport::default())
         }
     }
 }
@@ -843,22 +776,15 @@ fn migrate_registry(
         if assets::record(&registry, &id).is_some() {
             continue;
         }
-        let brief = art_brief::load(root, &id)?
+        let _brief = art_brief::load(root, &id)?
             .ok_or_else(|| AppError::command(format!("missing brief `{id}`")))?;
-        let (status, file) = match brief.selection.as_ref().and_then(|selection| {
-            brief
-                .candidates
-                .iter()
-                .find(|candidate| candidate.id == selection.candidate_id)
-        }) {
-            Some(candidate) => (AssetStatus::Draft, Some(candidate.file.clone())),
-            None => (AssetStatus::Requested, None),
-        };
+        let status = AssetStatus::Requested;
         registry.assets.push(AssetRecord {
             id: id.clone(),
             brief: format!("art/briefs/{id}.yaml"),
             status,
-            file,
+            selection: None,
+            approved: None,
             superseded_by: None,
         });
     }
@@ -899,7 +825,8 @@ fn register_asset(
         id: art_id.into(),
         brief: format!("art/briefs/{art_id}.yaml"),
         status: AssetStatus::Requested,
-        file: None,
+        selection: None,
+        approved: None,
         superseded_by: None,
     });
     registry
@@ -922,7 +849,7 @@ fn select_candidate(
     candidate_id: &str,
     feedback: Option<String>,
 ) -> Result<(), AppError> {
-    let mut brief = art_brief::load(root, art_id)?
+    let brief = art_brief::load(root, art_id)?
         .ok_or_else(|| AppError::command(format!("no art brief exists for `{art_id}`")))?;
     let candidate = brief
         .candidates
@@ -930,10 +857,6 @@ fn select_candidate(
         .find(|candidate| candidate.id == candidate_id)
         .ok_or_else(|| AppError::command(format!("unknown candidate `{candidate_id}`")))?;
     let file = candidate.file.clone();
-    brief.selection = Some(art_brief::ArtSelection {
-        candidate_id: candidate_id.into(),
-        feedback,
-    });
     if !art_brief::validate(root, config, &brief).can_proceed() {
         return Err(AppError::Validation);
     }
@@ -950,15 +873,20 @@ fn select_candidate(
         ));
     }
     if matches!(asset.status, AssetStatus::Review | AssetStatus::Requested) {
-        assets::transition(asset, AssetStatus::Draft, Some(file))?;
+        assets::transition(asset, AssetStatus::Draft)?;
     } else if asset.status == AssetStatus::Draft {
-        asset.file = Some(file);
     } else {
         return Err(AppError::command(
             "cannot select a candidate for a terminal asset".into(),
         ));
     }
-    art_brief::save(root, &brief)?;
+    let sha256 = assets::sha256(root, &file)?;
+    asset.selection = Some(AssetSelection {
+        candidate_id: candidate_id.into(),
+        file,
+        sha256,
+    });
+    let _ = feedback;
     assets::save(root, &registry)?;
     print_report(format, "art select", registry, ValidationReport::default())
 }
@@ -973,7 +901,7 @@ fn transition_asset(
         assets::load(root)?.ok_or_else(|| AppError::command("no asset registry exists".into()))?;
     let asset = assets::record_mut(&mut registry, art_id)
         .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
-    assets::transition(asset, next, None)?;
+    assets::transition(asset, next)?;
     assets::save(root, &registry)?;
     print_report(
         format,
@@ -998,11 +926,16 @@ fn approve_asset(
             "only review assets can be approved".into(),
         ));
     }
-    let source = asset
-        .file
-        .as_ref()
-        .ok_or_else(|| AppError::command("review asset has no file".into()))?;
-    let source = root.join(source);
+    let selection = asset
+        .selection
+        .clone()
+        .ok_or_else(|| AppError::command("review asset has no selected candidate".into()))?;
+    let source = root.join(&selection.file);
+    if assets::sha256(root, &selection.file)? != selection.sha256 {
+        return Err(AppError::command(
+            "selected candidate no longer matches its pinned SHA-256".into(),
+        ));
+    }
     let extension = source
         .extension()
         .and_then(|value| value.to_str())
@@ -1022,11 +955,13 @@ fn approve_asset(
             .ok_or_else(|| AppError::command("approved path has no parent".into()))?,
     )?;
     fs::copy(&source, &target)?;
-    assets::transition(
-        asset,
-        AssetStatus::Approved,
-        Some(relative_path(root, &target)),
-    )?;
+    let approved_file = relative_path(root, &target);
+    let approved_sha256 = assets::sha256(root, &approved_file)?;
+    assets::transition(asset, AssetStatus::Approved)?;
+    asset.approved = Some(ApprovedAsset {
+        file: approved_file,
+        sha256: approved_sha256,
+    });
     assets::save(root, &registry)?;
     print_report(format, "art approve", registry, ValidationReport::default())
 }
@@ -1046,7 +981,7 @@ fn supersede_asset(
     }
     let asset = assets::record_mut(&mut registry, art_id)
         .ok_or_else(|| AppError::command(format!("asset `{art_id}` is not registered")))?;
-    assets::transition(asset, AssetStatus::Superseded, None)?;
+    assets::transition(asset, AssetStatus::Superseded)?;
     asset.superseded_by = Some(successor.into());
     assets::save(root, &registry)?;
     print_report(

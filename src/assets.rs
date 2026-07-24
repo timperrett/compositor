@@ -2,11 +2,12 @@ use crate::markdown::valid_anchor;
 use crate::model::{Severity, ValidationIssue, ValidationReport};
 use crate::{storage, AppError};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub const ASSET_REGISTRY_SCHEMA: &str = "compositor.dev/art-assets/v1";
+pub const ASSET_REGISTRY_SCHEMA: &str = "compositor.dev/art-assets/v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -23,9 +24,26 @@ pub struct AssetRecord {
     pub brief: String,
     pub status: AssetStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    pub selection: Option<AssetSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved: Option<ApprovedAsset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AssetSelection {
+    pub candidate_id: String,
+    pub file: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedAsset {
+    pub file: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,7 +148,7 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
         }
         match asset.status {
             AssetStatus::Requested => {
-                if asset.file.is_some() {
+                if asset.selection.is_some() || asset.approved.is_some() {
                     issue(
                         &mut report,
                         "ART_REQUESTED_HAS_FILE",
@@ -140,8 +158,8 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
                     );
                 }
             }
-            AssetStatus::Draft | AssetStatus::Review | AssetStatus::Approved => {
-                let Some(file) = asset.file.as_deref() else {
+            AssetStatus::Draft | AssetStatus::Review => {
+                let Some(selection) = asset.selection.as_ref() else {
                     issue(
                         &mut report,
                         "ART_FILE_MISSING",
@@ -151,8 +169,43 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
                     );
                     continue;
                 };
-                validate_file(root, file, &registry_path, &asset.id, &mut report);
-                if asset.status == AssetStatus::Approved && !file.starts_with("assets/approved/") {
+                validate_file(
+                    root,
+                    &selection.file,
+                    &registry_path,
+                    &asset.id,
+                    &mut report,
+                );
+                validate_hash(
+                    root,
+                    &selection.file,
+                    &selection.sha256,
+                    &registry_path,
+                    &asset.id,
+                    &mut report,
+                );
+            }
+            AssetStatus::Approved => {
+                let Some(approved) = asset.approved.as_ref() else {
+                    issue(
+                        &mut report,
+                        "ART_FILE_MISSING",
+                        "approved assets require an approved file",
+                        &registry_path,
+                        Some(&asset.id),
+                    );
+                    continue;
+                };
+                validate_file(root, &approved.file, &registry_path, &asset.id, &mut report);
+                validate_hash(
+                    root,
+                    &approved.file,
+                    &approved.sha256,
+                    &registry_path,
+                    &asset.id,
+                    &mut report,
+                );
+                if !approved.file.starts_with("assets/approved/") {
                     issue(
                         &mut report,
                         "ART_APPROVED_PATH_INVALID",
@@ -201,11 +254,7 @@ pub fn allowed(status: AssetStatus, policy: AssetStatus) -> bool {
     }
 }
 
-pub fn transition(
-    record: &mut AssetRecord,
-    next: AssetStatus,
-    file: Option<String>,
-) -> Result<(), AppError> {
+pub fn transition(record: &mut AssetRecord, next: AssetStatus) -> Result<(), AppError> {
     let allowed = matches!(
         (record.status, next),
         (AssetStatus::Requested, AssetStatus::Draft)
@@ -226,10 +275,33 @@ pub fn transition(
         )));
     }
     record.status = next;
-    if file.is_some() {
-        record.file = file;
-    }
     Ok(())
+}
+
+pub fn sha256(root: &Path, file: &str) -> Result<String, AppError> {
+    let bytes = fs::read(root.join(file))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn validate_hash(
+    root: &Path,
+    file: &str,
+    expected: &str,
+    registry_path: &str,
+    id: &str,
+    report: &mut ValidationReport,
+) {
+    match sha256(root, file) {
+        Ok(actual) if actual == expected => {}
+        Ok(_) => issue(
+            report,
+            "ART_HASH_MISMATCH",
+            "asset file no longer matches its pinned SHA-256",
+            registry_path,
+            Some(id),
+        ),
+        Err(_) => {}
+    }
 }
 
 fn validate_file(
@@ -305,15 +377,11 @@ mod tests {
             id: "opening-rain".into(),
             brief: "art/briefs/opening-rain.yaml".into(),
             status: AssetStatus::Requested,
-            file: None,
+            selection: None,
+            approved: None,
             superseded_by: None,
         };
-        transition(
-            &mut asset,
-            AssetStatus::Draft,
-            Some("assets/drafts/opening-rain/a.png".into()),
-        )
-        .unwrap();
-        assert!(transition(&mut asset, AssetStatus::Approved, None).is_err());
+        transition(&mut asset, AssetStatus::Draft).unwrap();
+        assert!(transition(&mut asset, AssetStatus::Approved).is_err());
     }
 }

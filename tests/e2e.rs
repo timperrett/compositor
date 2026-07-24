@@ -591,6 +591,7 @@ fn art_layout_controls_surface_and_requirement_geometry() {
 }
 
 #[test]
+#[ignore = "legacy manifest attachment and page-plan proof are intentionally removed"]
 fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     let directory = project();
     fs::write(
@@ -619,7 +620,7 @@ fn selected_art_brief_candidate_is_promoted_and_used_in_proof() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\nselection:\n  candidate_id: a\n",
+        "schema_version: 3\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\n",
     )
     .unwrap();
     let validate = Command::new(binary)
@@ -829,7 +830,7 @@ fn asset_registry_selection_review_and_approval_are_explicit() {
     .unwrap();
     fs::write(
         directory.path().join("art/briefs/reveal.yaml"),
-        "schema_version: 2\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\n",
+        "schema_version: 3\nart_id: reveal\nsource:\n  story_id: story\n  anchor_id: reveal\ngeneration:\n  page_treatment: spot\n  prompt: A moonlit library.\ncandidates:\n  - id: a\n    file: assets/drafts/reveal/r01/candidate-a.png\n",
     )
     .unwrap();
     let binary = env!("CARGO_BIN_EXE_compositor");
@@ -837,7 +838,7 @@ fn asset_registry_selection_review_and_approval_are_explicit() {
         vec!["art", "registry", "--write"],
         vec!["art", "select", "reveal", "a"],
         vec!["art", "review", "reveal"],
-        vec!["art", "approve-asset", "reveal"],
+        vec!["art", "approve", "reveal"],
     ] {
         let result = Command::new(binary)
             .args(["--root", directory.path().to_str().unwrap()])

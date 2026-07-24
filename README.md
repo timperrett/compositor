@@ -6,10 +6,10 @@ into incrementally maintained book-production artifacts.
 ## Quick start
 
 ```bash
-cargo run -- init
+compositor init
 # Add compendiums/01-example/index.md and numbered story directories containing story.md.
-cargo run -- build --format json
-cargo run -- proof
+compositor build example-compendium --format json
+compositor proof
 ```
 
 Stories use YAML front matter with `id` and `title`. A top-level Markdown
@@ -18,9 +18,9 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 
 ## Commands
 
-`init`, `parse`, `validate`, `tree`, `status`, `build`, `diff source`, `plan`, `proof`,
-`inspect <story.md>`, `source sync`, `source resolve`, `validate-flow`, and `resolve` are available. `build` and `plan` currently support
-the conservative mode only. Use `--format json` for stable machine-readable
+`init`, `parse`, `validate`, `tree`, `build`, `proof`, `inspect <story.md>`,
+`source sync`, `source resolve`, and `validate-flow` are available. Use
+`--format json` for stable machine-readable
 reports.
 
 `tree` prints the ordered compendium and story catalog as `title [id]`, which
@@ -88,8 +88,8 @@ modify source Markdown or assets.
 
 Artwork intent, generation prompts, candidates, feedback, and selections live
 in human- and skill-authored YAML files at `art/briefs/<art-id>.yaml`.
-Compositor validates these records against the current illustration requirement
-but does not generate or revise them. See `docs/art-protocol.md` for the v2
-format and complete examples. Use `compositor art validate --strict` before
-generation or promotion, and `compositor art attach <art-id> --selected` to
-copy the selected draft candidate into `assets/approved/`.
+Compositor validates these records against the current Flow/Composition
+requirement but does not generate or revise them. See `docs/art-protocol.md`
+for the v3 format and complete examples. Use `compositor art validate --strict`
+before generation or promotion, then explicitly `select`, `review`, and
+`approve` a candidate to copy the pinned asset into `assets/approved/`.

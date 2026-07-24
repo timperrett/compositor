@@ -794,7 +794,14 @@ fn resolve_asset(
             report,
         ));
     }
-    let Some(source) = record.file.as_deref() else {
+    let source = match record.status {
+        AssetStatus::Approved => record.approved.as_ref().map(|asset| asset.file.as_str()),
+        AssetStatus::Draft | AssetStatus::Review => {
+            record.selection.as_ref().map(|asset| asset.file.as_str())
+        }
+        _ => None,
+    };
+    let Some(source) = source else {
         return Ok(unresolved(
             asset,
             "ART_FILE_MISSING",
@@ -959,7 +966,8 @@ mod tests {
                 id: "story-art".into(),
                 brief: "art/briefs/story-art.yaml".into(),
                 status: AssetStatus::Draft,
-                file: None,
+                selection: None,
+                approved: None,
                 superseded_by: None,
             }],
         };
@@ -1020,7 +1028,13 @@ mod tests {
                 id: "story-art".into(),
                 brief: "art/briefs/story-art.yaml".into(),
                 status: AssetStatus::Draft,
-                file: Some("assets/drafts/story-art.png".into()),
+                selection: Some(crate::assets::AssetSelection {
+                    candidate_id: "a".into(),
+                    file: "assets/drafts/story-art.png".into(),
+                    sha256: crate::assets::sha256(directory.path(), "assets/drafts/story-art.png")
+                        .unwrap(),
+                }),
+                approved: None,
                 superseded_by: None,
             }],
         };

@@ -7,7 +7,6 @@ use crate::planning::art_needed;
 use crate::storage;
 use crate::{config::Config, AppError};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 /// Synchronize illustration requirements from a newly-created plan. Art briefs
@@ -139,18 +138,68 @@ pub fn requirements_for_story(
     config: &Config,
     story_id: &str,
 ) -> Result<BTreeMap<String, IllustrationRequirement>, AppError> {
-    let base = config.state_dir(root).join("requirements");
-    if !base.is_dir() {
-        return Ok(BTreeMap::new());
-    }
     let mut output = BTreeMap::new();
-    for entry in fs::read_dir(base)?.filter_map(Result::ok) {
-        let art_id = entry.file_name().to_string_lossy().to_string();
-        if let Some(requirement) = storage::load_latest_requirement(root, config, &art_id)? {
-            if requirement.story_id == story_id {
-                output.insert(art_id, requirement);
-            }
-        }
+    let project = crate::discovery::discover(root, config)?;
+    let story = project
+        .compendiums
+        .iter()
+        .flat_map(|book| &book.stories)
+        .find(|story| story.id == story_id)
+        .ok_or_else(|| AppError::command(format!("unknown story `{story_id}`")))?;
+    let directory = root.join(
+        std::path::Path::new(&story.source)
+            .parent()
+            .ok_or_else(|| AppError::command("story has no parent".into()))?,
+    );
+    let composition_path = directory.join("hardcover.composition.yaml");
+    if !composition_path.is_file() {
+        return Ok(output);
+    }
+    let composition = crate::composition::load_plan(&composition_path)?;
+    let ids = std::iter::once(composition.opener.art.id).chain(
+        composition
+            .spreads
+            .iter()
+            .flat_map(|spread| spread.art_assets.iter().map(|art| art.id.clone())),
+    );
+    for art_id in ids {
+        let anchor = crate::art_brief::load(root, &art_id)?
+            .map(|brief| brief.source.anchor_id)
+            .unwrap_or_else(|| art_id.clone());
+        let unit = story
+            .units
+            .iter()
+            .find(|unit| unit.directives.anchor.as_deref() == Some(anchor.as_str()));
+        let (art_note, art_layout, geometry) = match unit {
+            Some(unit) => (
+                unit.directives.art.clone(),
+                unit.directives.art_layout.clone(),
+                unit.directives
+                    .art_layout
+                    .as_ref()
+                    .map(|layout| geometry(config, layout)),
+            ),
+            None => (None, None, None),
+        };
+        output.insert(
+            art_id.clone(),
+            IllustrationRequirement {
+                schema_version: SCHEMA_VERSION,
+                art_id,
+                story_id: story.id.clone(),
+                unit_ids: unit
+                    .and_then(|unit| unit.directives.anchor.clone())
+                    .into_iter()
+                    .collect(),
+                pages: Vec::new(),
+                layout: PageLayout::TextDominant,
+                status: ArtifactStatus::NeedsReview,
+                revision: 1,
+                art_layout,
+                geometry,
+                art_note,
+            },
+        );
     }
     Ok(output)
 }

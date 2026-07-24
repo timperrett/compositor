@@ -1,4 +1,4 @@
-# Art brief protocol v2
+# Art brief protocol v3
 
 An art brief is one YAML record at `art/briefs/<art-id>.yaml`. It is the
 single, local source for a skill's image-generation prompt, candidates,
@@ -12,7 +12,7 @@ candidate images, or a record that does not resolve to the current requirement.
 
 ## Required fields
 
-`schema_version` is always `2`. `art_id` must match its durable anchor.
+`schema_version` is always `3`. `art_id` must match its durable anchor.
 `source` identifies the story and authored `anchor_id`. Narrative artwork that
 is placed in a Composition Plan also declares ordered `source.spread_ids`.
 Those IDs must include every narrative spread that references the record.
@@ -42,9 +42,9 @@ in `candidates`.
    Composition Plan reference.
 4. Run Flow, Composition, coverage, and strict art validation.
 5. The rendering skill writes candidate files and adds them to that record.
-6. Set `selection.candidate_id` when one is wanted, optionally adding feedback.
-7. Run `compositor art attach <art-id> --selected` to copy that candidate to
-   `assets/approved/` and link it in the manifest.
+6. Run `compositor art select <art-id> <candidate-id>`, then `compositor art review <art-id>`.
+7. Run `compositor art approve <art-id>` to validate the reviewed selection,
+   copy it into `assets/approved/`, and pin its SHA-256 in `art/assets.yaml`.
 
 ## Examples
 

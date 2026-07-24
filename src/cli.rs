@@ -323,30 +323,12 @@ enum ApprovalKind {
 #[derive(Debug, Subcommand)]
 #[command(verbatim_doc_comment)]
 enum ArtCommand {
-    /// Mark an attached artwork record as approved for production use.
+    /// Approve a reviewed selected candidate and copy it into assets/approved.
     ///
-    /// Example: `compositor art approve-asset lantern-opener`
-    ApproveAsset {
+    /// Example: `compositor art approve lantern-opener`
+    Approve {
         /// Artwork ID from the illustration requirement and art brief.
         art_id: String,
-    },
-    /// Attach approved artwork to an illustration requirement.
-    ///
-    /// Supply a path to an already approved file, or use `--selected` to copy
-    /// the selected candidate from the art brief into `assets/approved/`.
-    ///
-    /// Examples:
-    /// `compositor art attach lantern-opener assets/approved/lantern-opener.png`
-    ///
-    /// `compositor art attach lantern-opener --selected`
-    Attach {
-        /// Artwork ID to attach.
-        art_id: String,
-        /// Approved image path when attaching an existing approved asset.
-        path: Option<PathBuf>,
-        /// Copy the selected candidate into the approved asset directory first.
-        #[arg(long)]
-        selected: bool,
     },
     /// Print the validated YAML art brief for one artwork ID.
     ///
@@ -1016,68 +998,6 @@ fn parse_revision(value: &str) -> Result<u64, AppError> {
         .map_err(|_| AppError::Command(format!("invalid revision `{value}`; use v001")))
 }
 
-fn validate_approved_asset(
-    root: &std::path::Path,
-    config: &Config,
-    path: &std::path::Path,
-) -> Result<String, AppError> {
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    if !candidate.is_file() {
-        return Err(AppError::Command(format!(
-            "approved artwork does not exist: {}",
-            candidate.display()
-        )));
-    }
-    let approved = root
-        .join(&config.assets.approved_directory)
-        .canonicalize()?;
-    let candidate = candidate.canonicalize()?;
-    if !candidate.starts_with(&approved) {
-        return Err(AppError::Command(format!(
-            "approved artwork must be inside {}",
-            approved.display()
-        )));
-    }
-    candidate
-        .strip_prefix(root.canonicalize()?)
-        .map(|value| value.to_string_lossy().replace('\\', "/"))
-        .map_err(|_| AppError::Command("approved artwork must be inside the project root".into()))
-}
-
-fn set_art_relationship(
-    root: &std::path::Path,
-    config: &Config,
-    art_id: &str,
-    brief: Option<String>,
-    artwork: Option<String>,
-) -> Result<(), AppError> {
-    let mut manifest = storage::load_manifest(root, config)?
-        .ok_or_else(|| AppError::Command("no manifest exists; run build first".into()))?;
-    let unit = manifest
-        .stories
-        .values_mut()
-        .flat_map(|story| story.units.iter_mut())
-        .find(|unit| unit.id == art_id)
-        .ok_or_else(|| AppError::Command(format!("unknown art `{art_id}`")))?;
-    if config.markdown.require_anchor_before_approval && unit.anchor.is_none() {
-        return Err(AppError::Blocking(format!(
-            "artwork relationship `{art_id}` requires an explicit anchor"
-        )));
-    }
-    if let Some(brief) = brief {
-        unit.art_brief = Some(brief);
-    }
-    if let Some(artwork) = artwork {
-        unit.approved_art = Some(artwork);
-    }
-    manifest.revision += 1;
-    storage::save_manifest(root, config, &manifest)
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct BuildOutput {
@@ -1397,6 +1317,13 @@ fn build_conventional_packages(
     config: &Config,
     request: ConventionalPackageBuildRequest<'_>,
 ) -> Result<(), AppError> {
+    let legacy_manifest = root.join(".compositor/manifest.json");
+    if legacy_manifest.exists() {
+        return Err(AppError::Blocking(format!(
+            "legacy production state detected at {}; this Flow/Composition-only release will not read or migrate it. Preserve it in version control, remove .compositor, then rebuild from story.flow.yaml and hardcover.composition.yaml",
+            legacy_manifest.display()
+        )));
+    }
     let project = discover(root, config)?;
     let compendium = project
         .compendiums
