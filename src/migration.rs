@@ -49,6 +49,16 @@ struct PlannedRecord {
     approved: Option<(ApprovedAsset, PathBuf)>,
 }
 
+struct StagedFile {
+    target: PathBuf,
+    staged: PathBuf,
+}
+
+struct PublishedFile {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+}
+
 #[derive(Debug, Deserialize)]
 struct LegacyManifest {
     schema_version: u32,
@@ -94,7 +104,7 @@ pub fn run(root: &Path, options: MigrationOptions) -> Result<MigrationReport, Ap
     }
     let eligible = eligible_art_ids(root, &config, &mut report)?;
     let legacy = legacy_assets(&manifest, &mut report);
-    let mut registry = assets::load(root)?.unwrap_or(AssetRegistry {
+    let registry = assets::load(root)?.unwrap_or(AssetRegistry {
         schema: assets::ASSET_REGISTRY_SCHEMA.into(),
         assets: Vec::new(),
     });
@@ -202,36 +212,190 @@ pub fn run(root: &Path, options: MigrationOptions) -> Result<MigrationReport, Ap
         return Ok(report);
     }
     if options.apply {
+        let mut next_registry = registry.clone();
         for record in &planned {
-            write_brief_if_legacy(root, &record.id, &record.brief)?;
-            if let Some((approved, source)) = &record.approved {
-                let target = root.join(&approved.file);
-                if target.is_file() {
-                    if assets::sha256(root, &approved.file)? != approved.sha256 {
-                        return Err(AppError::command(format!(
-                            "approved target hash changed for {}",
-                            record.id
-                        )));
-                    }
-                } else {
-                    fs::create_dir_all(target.parent().ok_or_else(|| {
-                        AppError::command("approved target has no parent".into())
-                    })?)?;
-                    fs::copy(source, &target)?;
-                }
-            }
-            merge_registry(&mut registry, record);
+            merge_registry(&mut next_registry, record);
         }
-        registry
+        next_registry
             .assets
             .sort_by(|left, right| left.id.cmp(&right.id));
-        assets::save(root, &registry)?;
-        crate::storage::write_json_atomic(
-            &root.join("output/reports/legacy-production-migration.json"),
-            &report,
-        )?;
+        apply_staged(root, &planned, &next_registry, &report)?;
     }
     Ok(report)
+}
+
+fn apply_staged(
+    root: &Path,
+    planned: &[PlannedRecord],
+    registry: &AssetRegistry,
+    report: &MigrationReport,
+) -> Result<(), AppError> {
+    let staging = tempfile::Builder::new()
+        .prefix(".compositor-migration-")
+        .tempdir_in(root)?;
+    let mut files = Vec::new();
+    for record in planned {
+        let target = art_brief::path(root, &record.id);
+        if brief_needs_upgrade(&target)? {
+            let text = serde_yaml::to_string(&record.brief)
+                .map_err(|error| AppError::serialization(error.to_string()))?;
+            stage_text(root, staging.path(), &target, &text, &mut files)?;
+        }
+        if let Some((approved, source)) = &record.approved {
+            let target = root.join(&approved.file);
+            if assets::sha256_path(source)? != approved.sha256 {
+                return Err(AppError::command(format!(
+                    "approved source hash changed for {}",
+                    record.id
+                )));
+            }
+            if target.exists() {
+                if assets::sha256_path(&target)? != approved.sha256 {
+                    return Err(AppError::command(format!(
+                        "approved target hash changed for {}",
+                        record.id
+                    )));
+                }
+            } else {
+                stage_copy(root, staging.path(), &target, source, &mut files)?;
+            }
+        }
+    }
+    let registry_text = serde_yaml::to_string(registry)
+        .map_err(|error| AppError::serialization(error.to_string()))?;
+    stage_text(
+        root,
+        staging.path(),
+        &assets::path(root),
+        &registry_text,
+        &mut files,
+    )?;
+    let receipt = serde_json::to_vec_pretty(report)
+        .map_err(|error| AppError::serialization(error.to_string()))?;
+    stage_bytes(
+        root,
+        staging.path(),
+        &root.join("output/reports/legacy-production-migration.json"),
+        &receipt,
+        &mut files,
+    )?;
+    publish_staged(root, staging.path(), &files)
+}
+
+fn stage_text(
+    root: &Path,
+    staging: &Path,
+    target: &Path,
+    text: &str,
+    files: &mut Vec<StagedFile>,
+) -> Result<(), AppError> {
+    stage_bytes(root, staging, target, text.as_bytes(), files)
+}
+
+fn stage_copy(
+    root: &Path,
+    staging: &Path,
+    target: &Path,
+    source: &Path,
+    files: &mut Vec<StagedFile>,
+) -> Result<(), AppError> {
+    stage_bytes(root, staging, target, &fs::read(source)?, files)
+}
+
+fn stage_bytes(
+    root: &Path,
+    staging: &Path,
+    target: &Path,
+    bytes: &[u8],
+    files: &mut Vec<StagedFile>,
+) -> Result<(), AppError> {
+    let relative = target.strip_prefix(root).map_err(|_| {
+        AppError::command(format!(
+            "migration target is outside project: {}",
+            target.display()
+        ))
+    })?;
+    let staged = staging.join(relative);
+    fs::create_dir_all(
+        staged
+            .parent()
+            .ok_or_else(|| AppError::command("migration staging path has no parent".into()))?,
+    )?;
+    fs::write(&staged, bytes)?;
+    files.push(StagedFile {
+        target: target.to_path_buf(),
+        staged,
+    });
+    Ok(())
+}
+
+fn publish_staged(root: &Path, staging: &Path, files: &[StagedFile]) -> Result<(), AppError> {
+    let backup = staging.join("backup");
+    let mut published = Vec::new();
+    for file in files {
+        let backup_path = backup.join(
+            file.target
+                .strip_prefix(root)
+                .map_err(|_| AppError::command("migration target is outside project".into()))?,
+        );
+        if let Err(error) = fs::create_dir_all(
+            file.target
+                .parent()
+                .ok_or_else(|| AppError::command("migration target has no parent".into()))?,
+        ) {
+            rollback_published(&published)?;
+            return Err(error.into());
+        }
+        let previous =
+            if file.target.exists() {
+                if let Err(error) = fs::create_dir_all(backup_path.parent().ok_or_else(|| {
+                    AppError::command("migration backup path has no parent".into())
+                })?) {
+                    rollback_published(&published)?;
+                    return Err(error.into());
+                }
+                if let Err(error) = fs::rename(&file.target, &backup_path) {
+                    rollback_published(&published)?;
+                    return Err(error.into());
+                }
+                Some(backup_path)
+            } else {
+                None
+            };
+        if let Err(error) = fs::rename(&file.staged, &file.target) {
+            if let Some(backup) = &previous {
+                fs::rename(backup, &file.target)?;
+            }
+            rollback_published(&published)?;
+            return Err(error.into());
+        }
+        published.push(PublishedFile {
+            target: file.target.clone(),
+            backup: previous,
+        });
+    }
+    Ok(())
+}
+
+fn rollback_published(published: &[PublishedFile]) -> Result<(), AppError> {
+    for file in published.iter().rev() {
+        if file.target.exists() {
+            fs::remove_file(&file.target)?;
+        }
+        if let Some(backup) = &file.backup {
+            fs::rename(backup, &file.target)?;
+        }
+    }
+    Ok(())
+}
+
+fn brief_needs_upgrade(path: &Path) -> Result<bool, AppError> {
+    let current: Value = serde_yaml::from_str(&fs::read_to_string(path)?)
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
+    Ok(!current
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .is_some_and(|version| version == u64::from(art_brief::ART_BRIEF_VERSION)))
 }
 
 fn migration_config(root: &Path) -> Result<Config, AppError> {
@@ -498,20 +662,6 @@ fn validate_geometry(
             brief.art_id, file
         )))
     }
-}
-
-fn write_brief_if_legacy(root: &Path, id: &str, brief: &ArtBrief) -> Result<(), AppError> {
-    let path = art_brief::path(root, id);
-    let current: Value = serde_yaml::from_str(&fs::read_to_string(&path)?)
-        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
-    if current
-        .get("schema_version")
-        .and_then(Value::as_u64)
-        .is_some_and(|version| version == u64::from(art_brief::ART_BRIEF_VERSION))
-    {
-        return Ok(());
-    }
-    art_brief::save(root, brief)
 }
 
 fn merge_registry(registry: &mut AssetRegistry, record: &PlannedRecord) {

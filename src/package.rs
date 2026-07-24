@@ -61,7 +61,7 @@ pub enum ParagraphEconomyStatus {
     Warning,
     Waived,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ArtManifest {
     id: String,
     role: String,
@@ -95,10 +95,13 @@ pub fn build(
     replace: bool,
     policy: PackagePolicy,
 ) -> Result<ValidationReport, AppError> {
-    let mut report = assets::validate(root, registry);
-    if policy.strict && !report.can_proceed() {
+    let registry_report = assets::validate(root, registry);
+    if policy.strict && !registry_report.can_proceed() {
         return Err(AppError::Validation);
     }
+    // Non-strict packages remain story-scoped: only their resolved records are
+    // hard gates. `art validate` remains the complete shared-registry audit.
+    let mut report = ValidationReport::default();
     let output_parent = output.parent().unwrap_or(root);
     fs::create_dir_all(output_parent)?;
     let temporary = tempfile::Builder::new()
@@ -259,7 +262,7 @@ pub fn build(
         serde_yaml::to_string(&root_manifest)
             .map_err(|error| AppError::serialization(error.to_string()))?,
     )?;
-    if policy.strict && !report.can_proceed() {
+    if !report.can_proceed() {
         return Err(AppError::Validation);
     }
     if output.exists() && !replace {
@@ -295,7 +298,14 @@ struct PackageRootManifest {
     story: PackageStoryManifest,
     edition: Edition,
     opener: PackageOpenerEntry,
+    build: PackageBuildManifest,
     spreads: PackageSpreadsManifest,
+}
+#[derive(Debug, Deserialize)]
+struct PackageBuildManifest {
+    asset_policy: String,
+    #[serde(rename = "strict_art")]
+    _strict_art: bool,
 }
 #[derive(Debug, Deserialize)]
 struct PackageStoryManifest {
@@ -314,6 +324,7 @@ struct PackageOpenerManifest {
     schema: String,
     title: String,
     placement: OpenerPlacement,
+    art: ArtManifest,
 }
 #[derive(Debug, Deserialize)]
 struct PackageSpreadsManifest {
@@ -335,6 +346,7 @@ struct PackageSpreadManifest {
     layout: LayoutChoice,
     text: PackageTextManifest,
     illustration: IllustrationIntent,
+    art: Vec<ArtManifest>,
 }
 #[derive(Debug, Deserialize)]
 struct PackageTextManifest {
@@ -381,6 +393,41 @@ pub fn validate_package(
     let composition: CompositionPlan =
         load_yaml(&story_directory.join(format!("{}.composition.yaml", root_manifest.edition.id)))?;
     let mut report = ValidationReport::default();
+    let policy = match root_manifest.build.asset_policy.as_str() {
+        "draft" => AssetStatus::Draft,
+        "review" => AssetStatus::Review,
+        "approved" => AssetStatus::Approved,
+        _ => {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_ASSET_POLICY_INVALID",
+                "package manifest has an unsupported asset policy".into(),
+                "manifest.yaml",
+                Some(&story.id),
+                None,
+            );
+            AssetStatus::Approved
+        }
+    };
+    let registry = match assets::load(root)? {
+        Some(registry) => registry,
+        None => {
+            package_issue(
+                &mut report,
+                Severity::Error,
+                "PACKAGE_ART_REGISTRY_MISSING",
+                "current project has no art registry".into(),
+                "art/assets.yaml",
+                Some(&story.id),
+                None,
+            );
+            AssetRegistry {
+                schema: assets::ASSET_REGISTRY_SCHEMA.into(),
+                assets: Vec::new(),
+            }
+        }
+    };
     if root_manifest.story.title != story.title || root_manifest.story.id != story.id {
         package_issue(
             &mut report,
@@ -437,6 +484,7 @@ pub fn validate_package(
                 schema,
                 title,
                 placement,
+                ..
             }) if schema == "compositor.dev/story-opener/v1"
                 && title == composition.opener.title
                 && placement == composition.opener.placement
@@ -453,6 +501,24 @@ pub fn validate_package(
             "opener",
             Some(&story.id),
             None,
+        );
+    }
+    if let Ok(opener_manifest) =
+        load_yaml::<PackageOpenerManifest>(&package.join("opener/opener.yaml"))
+    {
+        validate_package_art(
+            root,
+            config,
+            story,
+            &registry,
+            std::slice::from_ref(&composition.opener.art),
+            std::slice::from_ref(&opener_manifest.art),
+            ArtUsage::Opener,
+            None,
+            policy,
+            &package.join("opener"),
+            "opener",
+            &mut report,
         );
     }
     if root_manifest.spreads.count != flow.spreads.len()
@@ -567,6 +633,20 @@ pub fn validate_package(
                 Some(&flow_spread.id),
             );
         }
+        validate_package_art(
+            root,
+            config,
+            story,
+            &registry,
+            &composition_spread.art_assets,
+            &actual.art,
+            ArtUsage::Story,
+            Some(&flow_spread.id),
+            policy,
+            &spread_directory,
+            &expected_directory,
+            &mut report,
+        );
         compare_package_text(
             &mut report,
             &spread_directory.join("text.md"),
@@ -614,6 +694,131 @@ fn load_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
     serde_yaml::from_str(&text).map_err(|error| {
         AppError::serialization(format!("could not parse {}: {error}", path.display()))
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_package_art(
+    root: &Path,
+    config: &Config,
+    story: &Story,
+    registry: &AssetRegistry,
+    expected: &[ArtReference],
+    packaged: &[ArtManifest],
+    usage: ArtUsage,
+    spread_id: Option<&str>,
+    policy: AssetStatus,
+    directory: &Path,
+    package_path: &str,
+    report: &mut ValidationReport,
+) {
+    if expected.len() != packaged.len() {
+        package_issue(
+            report,
+            Severity::Error,
+            "PACKAGE_ART_STALE",
+            "package art entries do not match the current Composition Plan".into(),
+            package_path,
+            Some(&story.id),
+            spread_id,
+        );
+    }
+    for (reference, actual) in expected.iter().zip(packaged) {
+        let invalid = |message: &str, report: &mut ValidationReport| {
+            package_issue(
+                report,
+                Severity::Error,
+                "PACKAGE_ART_STALE",
+                message.into(),
+                package_path,
+                Some(&story.id),
+                spread_id,
+            )
+        };
+        if actual.id != reference.id || actual.role != reference.role || !actual.resolved {
+            invalid(
+                "package art entry does not match current art reference",
+                report,
+            );
+            continue;
+        }
+        let Some(record) = assets::record(registry, &reference.id) else {
+            invalid("current registry no longer contains package art", report);
+            continue;
+        };
+        let record_validation = assets::validate_record(root, record);
+        if !record_validation.can_proceed() {
+            report.issues.extend(record_validation.issues);
+            invalid("current package art registry record is invalid", report);
+            continue;
+        }
+        let Ok(Some(brief)) = art_brief::load(root, &reference.id) else {
+            invalid("current package art brief is missing or invalid", report);
+            continue;
+        };
+        if brief.usage != usage
+            || spread_id
+                .is_some_and(|spread| !brief.source.spread_ids.iter().any(|id| id == spread))
+            || !assets::allowed(record.status, policy)
+        {
+            invalid(
+                "current art lifecycle or Flow/Composition mapping has changed",
+                report,
+            );
+            continue;
+        }
+        let pinned = match record.status {
+            AssetStatus::Approved => record
+                .approved
+                .as_ref()
+                .map(|value| (&value.file, &value.sha256)),
+            AssetStatus::Draft | AssetStatus::Review => record
+                .selection
+                .as_ref()
+                .map(|value| (&value.file, &value.sha256)),
+            _ => None,
+        };
+        let Some((source, hash)) = pinned else {
+            invalid("current package art has no pinned file", report);
+            continue;
+        };
+        let extension = Path::new(source)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("bin");
+        let expected_file = format!("art/{}.{}", reference.id, extension);
+        let (layout, geometry) = match source_geometry(story, &brief.source.anchor_id, config) {
+            Ok(value) => value,
+            Err(_) => {
+                invalid("current art geometry is invalid", report);
+                continue;
+            }
+        };
+        if let Some(expected_geometry) = geometry.as_ref() {
+            match art_brief::candidate_geometry(&root.join(source)) {
+                Ok(actual_geometry)
+                    if art_brief::geometry_matches(expected_geometry, &actual_geometry) => {}
+                _ => {
+                    invalid(
+                        "current package art no longer matches its required geometry",
+                        report,
+                    );
+                    continue;
+                }
+            }
+        }
+        let package_file_ok = actual.status == format!("{:?}", record.status).to_lowercase()
+            && actual.source.as_deref() == Some(source)
+            && actual.file.as_deref() == Some(&expected_file)
+            && actual.art_layout == layout
+            && actual.geometry == geometry
+            && directory.join(&expected_file).is_file()
+            && assets::sha256_path(&directory.join(&expected_file))
+                .map(|value| value == *hash)
+                .unwrap_or(false);
+        if !package_file_ok {
+            invalid("package art file or resolved metadata is stale", report);
+        }
+    }
 }
 
 fn compare_package_text(
@@ -786,6 +991,16 @@ fn resolve_asset(
             report,
         ));
     };
+    let record_validation = assets::validate_record(root, record);
+    if !record_validation.can_proceed() {
+        report.issues.extend(record_validation.issues);
+        return Ok(unresolved(
+            asset,
+            "ART_RECORD_INVALID",
+            "registry record is not consistent with its brief or pinned file",
+            report,
+        ));
+    }
     let Some(brief) = art_brief::load(root, &asset.id)? else {
         return Ok(unresolved(
             asset,
@@ -821,13 +1036,17 @@ fn resolve_asset(
         ));
     }
     let source = match record.status {
-        AssetStatus::Approved => record.approved.as_ref().map(|asset| asset.file.as_str()),
-        AssetStatus::Draft | AssetStatus::Review => {
-            record.selection.as_ref().map(|asset| asset.file.as_str())
-        }
+        AssetStatus::Approved => record
+            .approved
+            .as_ref()
+            .map(|asset| (asset.file.as_str(), asset.sha256.as_str())),
+        AssetStatus::Draft | AssetStatus::Review => record
+            .selection
+            .as_ref()
+            .map(|asset| (asset.file.as_str(), asset.sha256.as_str())),
         _ => None,
     };
-    let Some(source) = source else {
+    let Some((source, expected_hash)) = source else {
         return Ok(unresolved(
             asset,
             "ART_FILE_MISSING",
@@ -844,14 +1063,35 @@ fn resolve_asset(
             report,
         ));
     }
+    if assets::sha256(root, source)? != expected_hash {
+        return Ok(unresolved(
+            asset,
+            "ART_HASH_MISMATCH",
+            "asset source no longer matches its pinned SHA-256",
+            report,
+        ));
+    }
+    let (art_layout, geometry) =
+        source_geometry(resolution.story, &brief.source.anchor_id, resolution.config)?;
+    if let Some(expected) = geometry.as_ref() {
+        let geometry_matches = art_brief::candidate_geometry(&source_path)
+            .map(|actual| art_brief::geometry_matches(expected, &actual))
+            .unwrap_or(false);
+        if !geometry_matches {
+            return Ok(unresolved(
+                asset,
+                "ART_GEOMETRY_MISMATCH",
+                "asset source no longer matches current art geometry",
+                report,
+            ));
+        }
+    }
     let extension = source_path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("bin");
     let file = format!("art/{}.{}", asset.id, extension);
     fs::copy(&source_path, resolution.destination.join(&file))?;
-    let (art_layout, geometry) =
-        source_geometry(resolution.story, &brief.source.anchor_id, resolution.config)?;
     Ok(ArtManifest {
         id: asset.id.clone(),
         role: asset.role.clone(),
@@ -871,7 +1111,7 @@ fn unresolved(
     report: &mut ValidationReport,
 ) -> ArtManifest {
     report.issues.push(ValidationIssue {
-        severity: Severity::Warning,
+        severity: Severity::Error,
         code: code.into(),
         message: message.into(),
         path: "art/assets.yaml".into(),
@@ -920,6 +1160,16 @@ mod tests {
     #[test]
     fn creates_a_missing_parent_directory_for_package_output() {
         let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::create_dir_all(directory.path().join("assets/drafts")).unwrap();
+        image::RgbImage::new(4800, 750)
+            .save(directory.path().join("assets/drafts/story-opener.png"))
+            .unwrap();
+        fs::write(
+            directory.path().join("art/briefs/story-opener.yaml"),
+            "schema_version: 3\nart_id: story-opener\nsource: { story_id: story, anchor_id: story-opening }\nusage: opener\ngeneration: { page_treatment: floating, prompt: An opener. }\ncandidates: [{ id: a, file: assets/drafts/story-opener.png }]\n",
+        )
+        .unwrap();
         let story_path = directory.path().join("story.md");
         fs::write(
             &story_path,
@@ -946,7 +1196,22 @@ mod tests {
             &composition,
             &AssetRegistry {
                 schema: assets::ASSET_REGISTRY_SCHEMA.into(),
-                assets: Vec::new(),
+                assets: vec![AssetRecord {
+                    id: "story-opener".into(),
+                    brief: "art/briefs/story-opener.yaml".into(),
+                    status: AssetStatus::Draft,
+                    selection: Some(crate::assets::AssetSelection {
+                        candidate_id: "a".into(),
+                        file: "assets/drafts/story-opener.png".into(),
+                        sha256: crate::assets::sha256(
+                            directory.path(),
+                            "assets/drafts/story-opener.png",
+                        )
+                        .unwrap(),
+                    }),
+                    approved: None,
+                    superseded_by: None,
+                }],
             },
             &output,
             false,
@@ -972,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_unlinked_story_art_unresolved() {
+    fn rejects_invalid_referenced_story_art() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
         let story_path = directory.path().join("story.md");
@@ -1024,7 +1289,7 @@ mod tests {
         assert!(report
             .issues
             .iter()
-            .any(|issue| issue.code == "ART_SPREAD_LINK_MISSING"));
+            .any(|issue| issue.code == "ART_RECORD_INVALID"));
     }
 
     #[test]
@@ -1041,29 +1306,56 @@ mod tests {
         let story = flow::load_story(&story_path).unwrap();
         fs::write(
             directory.path().join("art/briefs/story-art.yaml"),
-            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: framed, prompt: A scene. }\n",
+            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: framed, prompt: A scene. }\ncandidates: [{ id: a, file: assets/drafts/story-art.png }]\n",
         )
         .unwrap();
+        image::RgbImage::new(4800, 750)
+            .save(directory.path().join("assets/drafts/story-art.png"))
+            .unwrap();
+        image::RgbImage::new(4800, 750)
+            .save(directory.path().join("assets/drafts/story-opener.png"))
+            .unwrap();
         fs::write(
-            directory.path().join("assets/drafts/story-art.png"),
-            "placeholder",
+            directory.path().join("art/briefs/story-opener.yaml"),
+            "schema_version: 3\nart_id: story-opener\nsource: { story_id: story, anchor_id: scene }\nusage: opener\ngeneration: { page_treatment: floating, prompt: An opener. }\ncandidates: [{ id: a, file: assets/drafts/story-opener.png }]\n",
         )
         .unwrap();
         let registry = AssetRegistry {
             schema: crate::assets::ASSET_REGISTRY_SCHEMA.into(),
-            assets: vec![AssetRecord {
-                id: "story-art".into(),
-                brief: "art/briefs/story-art.yaml".into(),
-                status: AssetStatus::Draft,
-                selection: Some(crate::assets::AssetSelection {
-                    candidate_id: "a".into(),
-                    file: "assets/drafts/story-art.png".into(),
-                    sha256: crate::assets::sha256(directory.path(), "assets/drafts/story-art.png")
+            assets: vec![
+                AssetRecord {
+                    id: "story-art".into(),
+                    brief: "art/briefs/story-art.yaml".into(),
+                    status: AssetStatus::Draft,
+                    selection: Some(crate::assets::AssetSelection {
+                        candidate_id: "a".into(),
+                        file: "assets/drafts/story-art.png".into(),
+                        sha256: crate::assets::sha256(
+                            directory.path(),
+                            "assets/drafts/story-art.png",
+                        )
                         .unwrap(),
-                }),
-                approved: None,
-                superseded_by: None,
-            }],
+                    }),
+                    approved: None,
+                    superseded_by: None,
+                },
+                AssetRecord {
+                    id: "story-opener".into(),
+                    brief: "art/briefs/story-opener.yaml".into(),
+                    status: AssetStatus::Draft,
+                    selection: Some(crate::assets::AssetSelection {
+                        candidate_id: "a".into(),
+                        file: "assets/drafts/story-opener.png".into(),
+                        sha256: crate::assets::sha256(
+                            directory.path(),
+                            "assets/drafts/story-opener.png",
+                        )
+                        .unwrap(),
+                    }),
+                    approved: None,
+                    superseded_by: None,
+                },
+            ],
         };
         let flow_plan: StoryFlowPlan = serde_yaml::from_str(&format!(
             "schema: compositor.dev/story-flow/v1\nstory:\n  id: story\n  source_revision: {}\nspreads:\n  - id: spread-001\n    source:\n      from: {{ type: paragraph, id: opening }}\n      through: {{ type: paragraph, id: opening }}\n    role: opening\n    energy: 1\n    narrative: {{ purpose: Open the story. }}\n",

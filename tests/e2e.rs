@@ -128,6 +128,7 @@ fn production_cli_rejects_removed_legacy_configuration() {
 #[test]
 fn package_build_emits_a_flow_composition_assembly_guide() {
     let directory = package_project();
+    make_opener_art_ready(&directory);
     let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
         .args([
             "--root",
@@ -155,6 +156,7 @@ fn package_build_emits_a_flow_composition_assembly_guide() {
 #[test]
 fn explicit_output_requires_replace() {
     let directory = package_project();
+    make_opener_art_ready(&directory);
     let output = directory.path().join("package");
     fs::create_dir_all(&output).unwrap();
     let failure = Command::new(env!("CARGO_BIN_EXE_compositor"))
@@ -188,6 +190,95 @@ fn explicit_output_requires_replace() {
         "{}",
         String::from_utf8_lossy(&success.stderr)
     );
+}
+
+#[test]
+fn validate_package_detects_tampered_art() {
+    let directory = package_project();
+    make_opener_art_ready(&directory);
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "build",
+            "magic",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let package = directory.path().join("output/packages/magic/r01/01-story");
+    let valid = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    fs::write(package.join("opener/art/opener-art.png"), "tampered").unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+}
+
+#[test]
+fn migration_rolls_back_when_receipt_cannot_be_published() {
+    let directory = package_project();
+    let candidate = directory.path().join("assets/drafts/opener-art/a.png");
+    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+    image::RgbImage::new(1, 1).save(&candidate).unwrap();
+    fs::write(
+        directory.path().join("art/briefs/opener-art.yaml"),
+        "schema_version: 2\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\ncandidates:\n  - id: a\n    file: assets/drafts/opener-art/a.png\nselection:\n  candidate_id: a\n",
+    )
+    .unwrap();
+    legacy_manifest(&directory, None);
+    let brief_before =
+        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap();
+    let registry_before = fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap();
+    fs::write(directory.path().join("output"), "not a directory").unwrap();
+    assert!(migration::run(directory.path(), MigrationOptions { apply: true }).is_err());
+    assert_eq!(
+        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap(),
+        brief_before
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap(),
+        registry_before
+    );
+}
+
+fn make_opener_art_ready(directory: &tempfile::TempDir) {
+    let candidate = directory.path().join("assets/drafts/opener-art/a.png");
+    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+    image::RgbImage::new(1, 1).save(&candidate).unwrap();
+    fs::write(
+        directory.path().join("art/briefs/opener-art.yaml"),
+        "schema_version: 3\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\ncandidates:\n  - id: a\n    file: assets/drafts/opener-art/a.png\n",
+    )
+    .unwrap();
+    let hash =
+        compositor::assets::sha256(directory.path(), "assets/drafts/opener-art/a.png").unwrap();
+    fs::write(
+        directory.path().join("art/assets.yaml"),
+        format!(
+            "schema: compositor.dev/art-assets/v2\nassets:\n  - id: opener-art\n    brief: art/briefs/opener-art.yaml\n    status: draft\n    selection:\n      candidate_id: a\n      file: assets/drafts/opener-art/a.png\n      sha256: {hash}\n"
+        ),
+    )
+    .unwrap();
 }
 
 fn legacy_manifest(directory: &tempfile::TempDir, approved_art: Option<&str>) {

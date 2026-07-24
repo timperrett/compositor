@@ -95,15 +95,17 @@ The first command is a dry run and prints the complete mapping report. `--apply`
 only imports unambiguous, current Flow/Composition-linked artwork; it upgrades
 briefs, records verified selections as `review`, copies verified historical
 approvals into `assets/approved/`, and writes a receipt to
-`output/reports/legacy-production-migration.json`. It never deletes, renames,
-or archives `.compositor/`; review the receipt and remove that directory manually.
+`output/reports/legacy-production-migration.json`. Apply stages its output and
+rolls back published files on failure. It never deletes, renames, or archives
+`.compositor/`; review the receipt and remove that directory manually.
 
 ## Artwork records
 
-Artwork intent, generation prompts, candidates, feedback, and selections live
-in human- and skill-authored YAML files at `art/briefs/<art-id>.yaml`.
-Compositor validates these records against the current Flow/Composition
-requirement but does not generate or revise them. See `docs/art-protocol.md`
-for the v3 format and complete examples. Use `compositor art validate --strict`
-before generation or promotion, then explicitly `select`, `review`, and
-`approve` a candidate to copy the pinned asset into `assets/approved/`.
+Artwork intent, generation prompts, candidates, and feedback live in human- and
+skill-authored YAML files at `art/briefs/<art-id>.yaml`; `art/assets.yaml` owns
+the selected candidate and approved artifact. Compositor validates these records
+against the current Flow/Composition requirement but does not generate or revise
+them. See `docs/art-protocol.md` for the v3 format and complete examples. Use
+`compositor art validate --strict` before generation or promotion, then
+explicitly `select`, `review`, and `approve` a candidate to copy the pinned asset
+into `assets/approved/`.

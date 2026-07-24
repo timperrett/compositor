@@ -1,3 +1,4 @@
+use crate::art_brief;
 use crate::markdown::valid_anchor;
 use crate::model::{Severity, ValidationIssue, ValidationReport};
 use crate::{storage, AppError};
@@ -146,6 +147,22 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
                 Some(&asset.id),
             );
         }
+        let brief = match art_brief::load(root, &asset.id) {
+            Ok(brief) => brief,
+            Err(error) => {
+                issue(
+                    &mut report,
+                    "ART_BRIEF_INVALID",
+                    &format!("linked art brief is invalid: {error}"),
+                    &registry_path,
+                    Some(&asset.id),
+                );
+                None
+            }
+        };
+        if let (Some(selection), Some(brief)) = (asset.selection.as_ref(), brief.as_ref()) {
+            validate_selection(selection, brief, &registry_path, &asset.id, &mut report);
+        }
         match asset.status {
             AssetStatus::Requested => {
                 if asset.selection.is_some() || asset.approved.is_some() {
@@ -247,6 +264,16 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
     report
 }
 
+/// Validates one registry record in isolation. Package resolution uses this
+/// so unrelated shared-registry failures do not prevent a story build.
+pub fn validate_record(root: &Path, asset: &AssetRecord) -> ValidationReport {
+    let registry = AssetRegistry {
+        schema: ASSET_REGISTRY_SCHEMA.into(),
+        assets: vec![asset.clone()],
+    };
+    validate(root, &registry)
+}
+
 pub fn allowed(status: AssetStatus, policy: AssetStatus) -> bool {
     match (status.rank(), policy.rank()) {
         (Some(actual), Some(required)) => actual >= required,
@@ -279,7 +306,11 @@ pub fn transition(record: &mut AssetRecord, next: AssetStatus) -> Result<(), App
 }
 
 pub fn sha256(root: &Path, file: &str) -> Result<String, AppError> {
-    let bytes = fs::read(root.join(file))?;
+    sha256_path(&root.join(file))
+}
+
+pub fn sha256_path(path: &Path) -> Result<String, AppError> {
+    let bytes = fs::read(path)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
@@ -301,6 +332,38 @@ fn validate_hash(
             Some(id),
         ),
         Err(_) => {}
+    }
+}
+
+fn validate_selection(
+    selection: &AssetSelection,
+    brief: &art_brief::ArtBrief,
+    registry_path: &str,
+    id: &str,
+    report: &mut ValidationReport,
+) {
+    let Some(candidate) = brief
+        .candidates
+        .iter()
+        .find(|candidate| candidate.id == selection.candidate_id)
+    else {
+        issue(
+            report,
+            "ART_SELECTION_CANDIDATE_UNKNOWN",
+            "registry selection names a candidate absent from its brief",
+            registry_path,
+            Some(id),
+        );
+        return;
+    };
+    if candidate.file != selection.file {
+        issue(
+            report,
+            "ART_SELECTION_FILE_MISMATCH",
+            "registry selection file does not match its brief candidate",
+            registry_path,
+            Some(id),
+        );
     }
 }
 
@@ -383,5 +446,37 @@ mod tests {
         };
         transition(&mut asset, AssetStatus::Draft).unwrap();
         assert!(transition(&mut asset, AssetStatus::Approved).is_err());
+    }
+
+    #[test]
+    fn selection_must_match_a_brief_candidate() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::create_dir_all(directory.path().join("assets/drafts")).unwrap();
+        fs::write(directory.path().join("assets/drafts/a.png"), "candidate").unwrap();
+        fs::write(
+            directory.path().join("art/briefs/opening-rain.yaml"),
+            "schema_version: 3\nart_id: opening-rain\nsource: { story_id: story, anchor_id: opening }\ngeneration: { page_treatment: floating, prompt: Rain. }\ncandidates: [{ id: actual, file: assets/drafts/a.png }]\n",
+        )
+        .unwrap();
+        let registry = AssetRegistry {
+            schema: ASSET_REGISTRY_SCHEMA.into(),
+            assets: vec![AssetRecord {
+                id: "opening-rain".into(),
+                brief: "art/briefs/opening-rain.yaml".into(),
+                status: AssetStatus::Draft,
+                selection: Some(AssetSelection {
+                    candidate_id: "missing".into(),
+                    file: "assets/drafts/a.png".into(),
+                    sha256: sha256(directory.path(), "assets/drafts/a.png").unwrap(),
+                }),
+                approved: None,
+                superseded_by: None,
+            }],
+        };
+        assert!(validate(directory.path(), &registry)
+            .issues
+            .iter()
+            .any(|issue| issue.code == "ART_SELECTION_CANDIDATE_UNKNOWN"));
     }
 }
