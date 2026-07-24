@@ -92,6 +92,7 @@ pub fn build(
     composition: &CompositionPlan,
     registry: &AssetRegistry,
     output: &Path,
+    replace: bool,
     policy: PackagePolicy,
 ) -> Result<ValidationReport, AppError> {
     let mut report = assets::validate(root, registry);
@@ -124,6 +125,7 @@ pub fn build(
         },
         &mut report,
     )?;
+    let opener_summary = (opener_art.id.clone(), opener_art.status.clone());
     fs::write(
         opener_directory.join("opener.yaml"),
         serde_yaml::to_string(&OpenerManifest {
@@ -135,8 +137,11 @@ pub fn build(
         .map_err(|error| AppError::serialization(error.to_string()))?,
     )?;
     let mut guide = format!(
-        "<!doctype html><html><body><h1>Assembly guide</h1><section><h2>Story opener — {}</h2><p>center-page</p><p>opener</p></section>",
-        composition.opener.title
+        "<!doctype html><html><body><h1>Assembly guide</h1><section><h2>Story opener — {}</h2><p>{:?}</p><p>art: {} ({})</p></section>",
+        escape_html(&composition.opener.title),
+        composition.opener.placement,
+        escape_html(&opener_summary.0),
+        escape_html(&opener_summary.1),
     );
     let mut entries = Vec::new();
     for (index, flow_spread) in flow.spreads.iter().enumerate() {
@@ -203,6 +208,11 @@ pub fn build(
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let art_summary = art
+            .iter()
+            .map(|asset| format!("{}: {}", asset.id, asset.status))
+            .collect::<Vec<_>>()
+            .join(", ");
         let manifest = SpreadManifest {
             schema: "compositor.dev/resolved-spread/v3",
             id: &flow_spread.id,
@@ -225,11 +235,14 @@ pub fn build(
                 .map_err(|error| AppError::serialization(error.to_string()))?,
         )?;
         guide.push_str(&format!(
-            "<section><h2>Spread {} — {}</h2><p>{}</p><p>{}</p></section>",
+            "<section><h2>Spread {} — {}</h2><p>id: {}</p><p>layout: {}/{}</p><p>art: {}</p><pre>{}</pre></section>",
             index + 1,
-            flow_spread.role,
-            composition_spread.layout.family,
-            directory
+            escape_html(&flow_spread.role),
+            escape_html(&flow_spread.id),
+            escape_html(&composition_spread.layout.family),
+            escape_html(&composition_spread.layout.variant),
+            escape_html(&art_summary),
+            escape_html(&text),
         ));
         entries.push(serde_json::json!({"id": flow_spread.id, "directory": directory, "role": flow_spread.role}));
     }
@@ -249,11 +262,24 @@ pub fn build(
     if policy.strict && !report.can_proceed() {
         return Err(AppError::Validation);
     }
+    if output.exists() && !replace {
+        return Err(AppError::command(format!(
+            "package output already exists: {}; use --replace with an explicit --output to replace it",
+            output.display()
+        )));
+    }
     if output.exists() {
         fs::remove_dir_all(output)?;
     }
     fs::rename(package_root, output)?;
     Ok(report)
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[derive(Debug, Serialize)]
@@ -923,6 +949,7 @@ mod tests {
                 assets: Vec::new(),
             },
             &output,
+            false,
             PackagePolicy {
                 minimum: AssetStatus::Draft,
                 strict: false,
@@ -957,7 +984,7 @@ mod tests {
         let story = flow::load_story(&story_path).unwrap();
         fs::write(
             directory.path().join("art/briefs/story-art.yaml"),
-            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
+            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
         )
         .unwrap();
         let registry = AssetRegistry {
@@ -1014,7 +1041,7 @@ mod tests {
         let story = flow::load_story(&story_path).unwrap();
         fs::write(
             directory.path().join("art/briefs/story-art.yaml"),
-            "schema_version: 2\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: framed, prompt: A scene. }\n",
+            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: framed, prompt: A scene. }\n",
         )
         .unwrap();
         fs::write(
@@ -1057,6 +1084,7 @@ mod tests {
             &composition,
             &registry,
             &output,
+            false,
             PackagePolicy {
                 minimum: AssetStatus::Draft,
                 strict: false,

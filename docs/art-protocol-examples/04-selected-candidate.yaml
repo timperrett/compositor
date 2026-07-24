@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 art_id: golden-book-reveal
 source:
   story_id: golden-book-of-kindness
@@ -9,5 +9,6 @@ generation:
 candidates:
   - id: a
     file: assets/drafts/golden-book-reveal/r02/candidate-a.png
-selection:
-  candidate_id: a
+feedback:
+  - candidate_id: a
+    note: Candidate selected in art/assets.yaml after review.

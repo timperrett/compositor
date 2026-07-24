@@ -9,7 +9,6 @@ into incrementally maintained book-production artifacts.
 compositor init
 # Add compendiums/01-example/index.md and numbered story directories containing story.md.
 compositor build example-compendium --format json
-compositor proof
 ```
 
 Stories use YAML front matter with `id` and `title`. A top-level Markdown
@@ -18,7 +17,7 @@ for example `<!-- anchor: story-opening -->` or `<!-- layout: full-page -->`.
 
 ## Commands
 
-`init`, `parse`, `validate`, `tree`, `build`, `proof`, `inspect <story.md>`,
+`init`, `parse`, `validate`, `tree`, `build`, `inspect <story.md>`,
 `source sync`, `source resolve`, and `validate-flow` are available. Use
 `--format json` for stable machine-readable
 reports.
@@ -50,7 +49,7 @@ reference only `usage: story` art. Package builds emit the opener under
 
 Use `compositor art coverage --story <story-id> --edition <edition> --format json`
 to inspect the opener separately and identify each narrative spread as covered,
-missing, invalid, or needing a legacy-art mapping. Story art referenced by a
+missing, or invalid. Story art referenced by a
 Composition Plan must declare that spread in `source.spread_ids`.
 
 ## Package builds
@@ -78,11 +77,26 @@ allocated automatically (`r01`, then `r02`, and so on); a multi-story build
 shares one revision. Use `--output` only when a single story needs a
 non-conventional destination.
 
-Generated state lives in `.compositor/`; HTML proofs are written to
-`output/proofs/`; layout-ready plain-text exports are written to `output/text/`
-on every successful build. Both story-level and compendium-level `.txt` files
-are fully generated for import into a layout application. Normal commands never
-modify source Markdown or assets.
+Every package includes `assembly-guide.html`, an HTML review surface for the
+resolved opener and spreads. Existing `.compositor/` state is unsupported: keep
+it in version control, remove it manually, and rebuild from the Flow and
+Composition Plans. Normal commands never modify source Markdown or assets.
+
+## One-time legacy migration
+
+For an existing project, use the standalone bridge before removing legacy state:
+
+```bash
+bash scripts/migrate-legacy-production-state --root /path/to/project
+bash scripts/migrate-legacy-production-state --root /path/to/project --apply
+```
+
+The first command is a dry run and prints the complete mapping report. `--apply`
+only imports unambiguous, current Flow/Composition-linked artwork; it upgrades
+briefs, records verified selections as `review`, copies verified historical
+approvals into `assets/approved/`, and writes a receipt to
+`output/reports/legacy-production-migration.json`. It never deletes, renames,
+or archives `.compositor/`; review the receipt and remove that directory manually.
 
 ## Artwork records
 

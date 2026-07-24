@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Version 2 introduces explicit production-artifact state. Projects with a
-/// version-1 state directory must regenerate their state as a deliberate,
-/// clean migration rather than silently reinterpreting approved artifacts.
+/// Project configuration and report schema version.
 pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,15 +141,6 @@ pub enum BookOrientation {
     Landscape,
 }
 
-/// The strategy used when producing a page plan.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum BuildMode {
-    Conservative,
-    Rebalance,
-    Fresh,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArtLayout {
     pub surface: ArtSurface,
@@ -181,91 +170,6 @@ pub struct ArtGeometry {
     pub aspect_ratio: f64,
     pub width_px: u32,
     pub height_px: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Manifest {
-    pub schema_version: u32,
-    pub tool_version: String,
-    pub revision: u64,
-    pub compendiums: BTreeMap<String, ManifestCompendium>,
-    pub stories: BTreeMap<String, ManifestStory>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ManifestCompendium {
-    pub source: String,
-    pub stories: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ManifestStory {
-    pub source: String,
-    pub source_hash: String,
-    pub ordinal: usize,
-    pub units: Vec<ManifestUnit>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ManifestUnit {
-    pub id: String,
-    pub anchor: Option<String>,
-    pub ordinal: usize,
-    pub content_hash: String,
-    #[serde(default)]
-    pub normalized_content: String,
-    pub state: UnitState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub art_brief: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_art: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum UnitState {
-    Active,
-    Deleted,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeKind {
-    Unchanged,
-    Edited,
-    Inserted,
-    Deleted,
-    Moved,
-    Split,
-    Merged,
-    Reordered,
-    Ambiguous,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Change {
-    pub kind: ChangeKind,
-    pub story_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_unit_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct ChangeSet {
-    pub changes: Vec<Change>,
-}
-
-impl ChangeSet {
-    pub fn has_state_changes(&self) -> bool {
-        self.changes
-            .iter()
-            .any(|change| change.kind != ChangeKind::Unchanged)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -306,91 +210,6 @@ impl ValidationReport {
             .iter()
             .any(|issue| issue.severity == Severity::Blocking)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PagePlan {
-    pub schema_version: u32,
-    pub story_id: String,
-    pub manifest_revision: u64,
-    pub revision: u64,
-    /// The pagination settings used to generate this plan. Empty means a
-    /// legacy plan, which is intentionally treated as stale.
-    #[serde(default)]
-    pub pagination_fingerprint: String,
-    pub status: ArtifactStatus,
-    pub assignments: Vec<PageAssignment>,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PageAssignment {
-    pub pages: Vec<u32>,
-    pub units: Vec<String>,
-    /// Word ranges for text units that continue across page assignments. Empty
-    /// on plans written before fragment support, where each listed unit is
-    /// rendered in full.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fragments: Vec<PageFragment>,
-    pub layout: PageLayout,
-    pub word_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub art_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ArtifactStatus {
-    #[default]
-    Candidate,
-    NeedsReview,
-    Approved,
-    Superseded,
-    Orphaned,
-    Locked,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IllustrationRequirement {
-    pub schema_version: u32,
-    pub art_id: String,
-    pub story_id: String,
-    pub unit_ids: Vec<String>,
-    pub pages: Vec<u32>,
-    pub layout: PageLayout,
-    pub status: ArtifactStatus,
-    pub revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub art_layout: Option<ArtLayout>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub geometry: Option<ArtGeometry>,
-    /// The authored art intent, retained so a generated Markdown brief has a
-    /// deterministic starting point without copying it into the manuscript.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub art_note: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ArtifactIndex {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active: Option<String>,
-    #[serde(default)]
-    pub candidates: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PageFragment {
-    pub unit_id: String,
-    /// Zero-based, exclusive word range within the directive-stripped source
-    /// unit. These offsets keep unit identity stable while allowing prose to
-    /// flow over multiple planned pages.
-    pub start_word: usize,
-    pub end_word: usize,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Resolutions {
-    pub mappings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

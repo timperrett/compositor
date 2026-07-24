@@ -1,12 +1,13 @@
 # Art brief protocol v3
 
 An art brief is one YAML record at `art/briefs/<art-id>.yaml`. It is the
-single, local source for a skill's image-generation prompt, candidates,
-feedback, and chosen direction. Compositor owns the matching illustration
-requirement; it validates the record but never writes it.
+single, local source for a skill's image-generation prompt, candidates, and
+feedback. `art/assets.yaml` owns the selected candidate and approved artifact.
+Compositor derives the current requirement from the Markdown, Flow Plan,
+Composition Plan, and design system.
 
 The normative machine schema is
-[`schemas/art-brief-v2.schema.json`](../schemas/art-brief-v2.schema.json).
+[`schemas/art-brief-v3.schema.json`](../schemas/art-brief-v3.schema.json).
 Compositor accepts YAML and rejects unknown fields, unsafe paths, invalid
 candidate images, or a record that does not resolve to the current requirement.
 
@@ -30,8 +31,8 @@ compact isolated subject grouping on an otherwise clean white page, or
 `full-bleed` for art that deliberately fills the complete printed frame.
 
 All `file` and `canon_references` paths are project-relative. Candidates must
-be existing PNG, JPG, JPEG, or WebP files. A selected candidate must be listed
-in `candidates`.
+be existing PNG, JPG, JPEG, or WebP files. `feedback` records a candidate ID
+and editorial note; selection is deliberately not a brief field.
 
 ## Typical workflow
 
@@ -52,6 +53,5 @@ See [`art-protocol-examples`](art-protocol-examples/) for complete copyable
 records: a minimal exploration, Edgar's library discovery, candidate feedback,
 a selected candidate, and a stale requirement warning.
 
-There is no `render-prompt.md` fallback. Legacy records without spread links
-remain readable only so they can be mapped deliberately; `art coverage` reports
-them as `needs-mapping` instead of assigning them automatically.
+There is no `render-prompt.md` fallback. Art that is not referenced by the
+opener or a narrative spread is not lifecycle-eligible.

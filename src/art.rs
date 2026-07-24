@@ -1,82 +1,8 @@
-use crate::identity::ResolvedStory;
-use crate::model::{
-    ArtGeometry, ArtLayout, ArtOrientation, ArtSurface, ArtifactStatus, IllustrationRequirement,
-    PageLayout, PagePlan, Story, SCHEMA_VERSION,
-};
-use crate::planning::art_needed;
-use crate::storage;
+use crate::model::{ArtGeometry, ArtLayout, ArtOrientation, ArtSurface};
 use crate::{config::Config, AppError};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
-
-/// Synchronize illustration requirements from a newly-created plan. Art briefs
-/// are external, skill-authored protocol records in `art/briefs/`.
-pub fn sync_requirements(
-    root: &Path,
-    config: &Config,
-    story: &Story,
-    resolved: &ResolvedStory,
-    plan: &PagePlan,
-) -> Result<Vec<IllustrationRequirement>, AppError> {
-    let mut requirements = Vec::new();
-    for (unit, id) in story.units.iter().zip(&resolved.ids) {
-        if !art_needed(unit) {
-            continue;
-        }
-        let pages = plan
-            .assignments
-            .iter()
-            .filter(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
-            .flat_map(|assignment| assignment.pages.iter().copied())
-            .collect::<Vec<_>>();
-        let layout = plan
-            .assignments
-            .iter()
-            .find(|assignment| assignment.units.iter().any(|unit_id| unit_id == id))
-            .map(|assignment| assignment.layout)
-            .unwrap_or(PageLayout::TextDominant);
-        let geometry = if let Some(art_layout) = unit.directives.art_layout.as_ref() {
-            validate_layout(config, art_layout).map_err(AppError::command)?;
-            Some(geometry(config, art_layout))
-        } else {
-            None
-        };
-        let previous = storage::load_latest_requirement(root, config, id)?;
-        if let Some(previous) = previous.as_ref() {
-            if previous.story_id == story.id
-                && previous.unit_ids == [id.clone()]
-                && previous.pages == pages
-                && previous.layout == layout
-                && previous.art_note == unit.directives.art
-                && previous.art_layout == unit.directives.art_layout
-                && previous.geometry == geometry
-            {
-                requirements.push(previous.clone());
-                continue;
-            }
-        }
-        let revision = previous
-            .as_ref()
-            .map(|record| record.revision + 1)
-            .unwrap_or(1);
-        let record = IllustrationRequirement {
-            schema_version: SCHEMA_VERSION,
-            art_id: id.clone(),
-            story_id: story.id.clone(),
-            unit_ids: vec![id.clone()],
-            pages,
-            layout,
-            status: ArtifactStatus::NeedsReview,
-            revision,
-            art_layout: unit.directives.art_layout.clone(),
-            geometry,
-            art_note: unit.directives.art.clone(),
-        };
-        storage::save_requirement(root, config, &record)?;
-        requirements.push(record);
-    }
-    Ok(requirements)
-}
 
 pub fn geometry(config: &Config, layout: &ArtLayout) -> ArtGeometry {
     let surface_width_in = match layout.surface {
@@ -133,11 +59,21 @@ pub fn validate_layout(config: &Config, layout: &ArtLayout) -> Result<(), String
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DerivedArtRequirement {
+    pub art_id: String,
+    pub story_id: String,
+    pub anchor_id: Option<String>,
+    pub art_layout: Option<ArtLayout>,
+    pub geometry: Option<ArtGeometry>,
+    pub art_note: Option<String>,
+}
+
 pub fn requirements_for_story(
     root: &Path,
     config: &Config,
     story_id: &str,
-) -> Result<BTreeMap<String, IllustrationRequirement>, AppError> {
+) -> Result<BTreeMap<String, DerivedArtRequirement>, AppError> {
     let mut output = BTreeMap::new();
     let project = crate::discovery::discover(root, config)?;
     let story = project
@@ -183,18 +119,10 @@ pub fn requirements_for_story(
         };
         output.insert(
             art_id.clone(),
-            IllustrationRequirement {
-                schema_version: SCHEMA_VERSION,
+            DerivedArtRequirement {
                 art_id,
                 story_id: story.id.clone(),
-                unit_ids: unit
-                    .and_then(|unit| unit.directives.anchor.clone())
-                    .into_iter()
-                    .collect(),
-                pages: Vec::new(),
-                layout: PageLayout::TextDominant,
-                status: ArtifactStatus::NeedsReview,
-                revision: 1,
+                anchor_id: unit.and_then(|unit| unit.directives.anchor.clone()),
                 art_layout,
                 geometry,
                 art_note,
