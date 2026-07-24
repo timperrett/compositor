@@ -1,5 +1,4 @@
 use compositor::config::DEFAULT_CONFIG;
-use compositor::migration::{self, MigrationOptions};
 use std::fs;
 use std::process::Command;
 
@@ -75,6 +74,7 @@ fn cli_reports_the_build_version_and_omits_legacy_commands() {
     let binary = env!("CARGO_BIN_EXE_compositor");
     let version = Command::new(binary).arg("--version").output().unwrap();
     assert!(version.status.success());
+    assert!(String::from_utf8_lossy(&version.stdout).contains("0.2.0"));
     let help = Command::new(binary).arg("--help").output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
@@ -83,6 +83,48 @@ fn cli_reports_the_build_version_and_omits_legacy_commands() {
             !help.contains(&format!("\n  {command} ")),
             "legacy command {command} remains visible"
         );
+    }
+}
+
+#[test]
+fn init_creates_reports_but_not_removed_proof_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args(["--root", directory.path().to_str().unwrap(), "init"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(directory.path().join("output/reports").is_dir());
+    assert!(!directory.path().join("output/proofs").exists());
+}
+
+#[test]
+fn website_uses_current_review_surface_terms() {
+    let website = fs::read_to_string("website/index.html").unwrap();
+    assert!(website.contains("assembly-guide.html"));
+    assert!(!website.to_ascii_lowercase().contains("proof.html"));
+    assert!(!website.to_ascii_lowercase().contains("html proof"));
+}
+
+#[test]
+fn documentation_does_not_reintroduce_removed_production_surfaces() {
+    for path in ["README.md", "website/index.html", "docs/art-protocol.md"] {
+        let text = fs::read_to_string(path).unwrap().to_ascii_lowercase();
+        for phrase in [
+            "proof.html",
+            "html proof",
+            "compositor plan",
+            "compositor approve",
+        ] {
+            assert!(
+                !text.contains(phrase),
+                "{path} contains removed term {phrase}"
+            );
+        }
     }
 }
 
@@ -234,33 +276,6 @@ fn validate_package_detects_tampered_art() {
     assert!(!invalid.status.success());
 }
 
-#[test]
-fn migration_rolls_back_when_receipt_cannot_be_published() {
-    let directory = package_project();
-    let candidate = directory.path().join("assets/drafts/opener-art/a.png");
-    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
-    image::RgbImage::new(1, 1).save(&candidate).unwrap();
-    fs::write(
-        directory.path().join("art/briefs/opener-art.yaml"),
-        "schema_version: 2\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\ncandidates:\n  - id: a\n    file: assets/drafts/opener-art/a.png\nselection:\n  candidate_id: a\n",
-    )
-    .unwrap();
-    legacy_manifest(&directory, None);
-    let brief_before =
-        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap();
-    let registry_before = fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap();
-    fs::write(directory.path().join("output"), "not a directory").unwrap();
-    assert!(migration::run(directory.path(), MigrationOptions { apply: true }).is_err());
-    assert_eq!(
-        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap(),
-        brief_before
-    );
-    assert_eq!(
-        fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap(),
-        registry_before
-    );
-}
-
 fn make_opener_art_ready(directory: &tempfile::TempDir) {
     let candidate = directory.path().join("assets/drafts/opener-art/a.png");
     fs::create_dir_all(candidate.parent().unwrap()).unwrap();
@@ -279,136 +294,4 @@ fn make_opener_art_ready(directory: &tempfile::TempDir) {
         ),
     )
     .unwrap();
-}
-
-fn legacy_manifest(directory: &tempfile::TempDir, approved_art: Option<&str>) {
-    let manifest = serde_json::json!({
-        "schema_version": 2,
-        "stories": { "story": { "units": [{
-            "id": "opening", "anchor": "opening",
-            "art_brief": "art/briefs/opener-art.yaml",
-            "approved_art": approved_art
-        }]}}
-    });
-    let path = directory.path().join(".compositor/manifest.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    compositor::storage::write_json_atomic(&path, &manifest).unwrap();
-}
-
-#[test]
-fn legacy_migration_dry_run_is_non_mutating_and_apply_imports_review_selection() {
-    let directory = package_project();
-    let candidate = directory.path().join("assets/drafts/opener-art/a.png");
-    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
-    image::RgbImage::new(1, 1).save(&candidate).unwrap();
-    fs::write(
-        directory.path().join("art/briefs/opener-art.yaml"),
-        "schema_version: 2\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\ncandidates:\n  - id: a\n    file: assets/drafts/opener-art/a.png\nselection:\n  candidate_id: a\n  feedback: Keep this direction.\n",
-    )
-    .unwrap();
-    legacy_manifest(&directory, None);
-    let config = directory.path().join("compositor.toml");
-    fs::write(
-        &config,
-        format!("{}\n[state]\ndirectory = \".compositor\"\n", DEFAULT_CONFIG),
-    )
-    .unwrap();
-    let brief_before =
-        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap();
-    let report = migration::run(directory.path(), MigrationOptions { apply: false }).unwrap();
-    assert!(report.blockers.is_empty(), "{:?}", report.blockers);
-    assert_eq!(
-        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap(),
-        brief_before
-    );
-    assert!(!directory
-        .path()
-        .join("output/reports/legacy-production-migration.json")
-        .exists());
-
-    let report = migration::run(directory.path(), MigrationOptions { apply: true }).unwrap();
-    assert!(report.blockers.is_empty(), "{:?}", report.blockers);
-    let brief = fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml")).unwrap();
-    assert!(brief.contains("schema_version: 3"));
-    assert!(!brief.contains("selection:"));
-    let registry = fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap();
-    assert!(registry.contains("status: review"));
-    assert!(registry.contains("candidate_id: a"));
-    assert!(directory.path().join(".compositor/manifest.json").is_file());
-}
-
-#[test]
-fn legacy_migration_copies_a_verified_approved_asset() {
-    let directory = package_project();
-    let legacy_asset = directory.path().join("assets/legacy/opener.png");
-    fs::create_dir_all(legacy_asset.parent().unwrap()).unwrap();
-    image::RgbImage::new(1, 1).save(&legacy_asset).unwrap();
-    fs::write(
-        directory.path().join("art/briefs/opener-art.yaml"),
-        "schema_version: 2\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\n",
-    )
-    .unwrap();
-    legacy_manifest(&directory, Some("assets/legacy/opener.png"));
-    let report = migration::run(directory.path(), MigrationOptions { apply: true }).unwrap();
-    assert!(report.blockers.is_empty(), "{:?}", report.blockers);
-    let approved = directory.path().join("assets/approved/opener-art.png");
-    assert!(approved.is_file());
-    assert_eq!(
-        compositor::assets::sha256(directory.path(), "assets/legacy/opener.png").unwrap(),
-        compositor::assets::sha256(directory.path(), "assets/approved/opener-art.png").unwrap()
-    );
-    assert!(fs::read_to_string(directory.path().join("art/assets.yaml"))
-        .unwrap()
-        .contains("status: approved"));
-    assert!(directory.path().join(".compositor/manifest.json").is_file());
-}
-
-#[test]
-fn legacy_migration_rejects_unsupported_state_without_writing() {
-    let directory = package_project();
-    let manifest = directory.path().join(".compositor/manifest.json");
-    fs::create_dir_all(manifest.parent().unwrap()).unwrap();
-    fs::write(&manifest, "{\"schema_version\": 99, \"stories\": {}}").unwrap();
-    let registry_before = fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap();
-    let report = migration::run(directory.path(), MigrationOptions { apply: true }).unwrap();
-    assert!(!report.blockers.is_empty());
-    assert_eq!(
-        fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap(),
-        registry_before
-    );
-    assert!(!directory
-        .path()
-        .join("output/reports/legacy-production-migration.json")
-        .exists());
-}
-
-#[test]
-fn legacy_migration_rejects_an_approved_target_hash_collision() {
-    let directory = package_project();
-    let legacy_asset = directory.path().join("assets/legacy/opener.png");
-    fs::create_dir_all(legacy_asset.parent().unwrap()).unwrap();
-    image::RgbImage::new(1, 1).save(&legacy_asset).unwrap();
-    fs::write(
-        directory.path().join("art/briefs/opener-art.yaml"),
-        "schema_version: 2\nart_id: opener-art\nsource:\n  story_id: story\n  anchor_id: opening\nusage: opener\ngeneration:\n  page_treatment: floating\n  prompt: A test opener.\n",
-    )
-    .unwrap();
-    let approved = directory.path().join("assets/approved/opener-art.png");
-    fs::create_dir_all(approved.parent().unwrap()).unwrap();
-    image::RgbImage::new(2, 2).save(&approved).unwrap();
-    legacy_manifest(&directory, Some("assets/legacy/opener.png"));
-    let report = migration::run(directory.path(), MigrationOptions { apply: true }).unwrap();
-    assert!(report
-        .blockers
-        .iter()
-        .any(|blocker| blocker.contains("overwrite")));
-    assert!(
-        fs::read_to_string(directory.path().join("art/briefs/opener-art.yaml"))
-            .unwrap()
-            .contains("schema_version: 2")
-    );
-    assert!(!directory
-        .path()
-        .join("output/reports/legacy-production-migration.json")
-        .exists());
 }

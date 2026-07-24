@@ -264,6 +264,33 @@ pub fn validate(root: &Path, registry: &AssetRegistry) -> ValidationReport {
     report
 }
 
+/// Validates only records whose briefs belong to the discovered story set.
+/// Project commands use this to leave configured ignored compendiums untouched.
+pub fn validate_for_stories(
+    root: &Path,
+    registry: &AssetRegistry,
+    story_ids: &BTreeSet<String>,
+) -> ValidationReport {
+    let assets = registry
+        .assets
+        .iter()
+        .filter(|asset| {
+            art_brief::source_story_id(root, &asset.id)
+                .ok()
+                .flatten()
+                .is_some_and(|story_id| story_ids.contains(&story_id))
+        })
+        .cloned()
+        .collect();
+    validate(
+        root,
+        &AssetRegistry {
+            schema: registry.schema.clone(),
+            assets,
+        },
+    )
+}
+
 /// Validates one registry record in isolation. Package resolution uses this
 /// so unrelated shared-registry failures do not prevent a story build.
 pub fn validate_record(root: &Path, asset: &AssetRecord) -> ValidationReport {
@@ -478,5 +505,47 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "ART_SELECTION_CANDIDATE_UNKNOWN"));
+    }
+
+    #[test]
+    fn story_scoped_validation_ignores_paused_compendium_records() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/active-art.yaml"),
+            "schema_version: 3\nart_id: active-art\nsource: { story_id: active, anchor_id: opening }\ngeneration: { page_treatment: floating, prompt: Active. }\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("art/briefs/paused-art.yaml"),
+            "schema_version: 2\nsource: { story_id: paused, anchor_id: opening }\n",
+        )
+        .unwrap();
+        let registry = AssetRegistry {
+            schema: ASSET_REGISTRY_SCHEMA.into(),
+            assets: vec![
+                AssetRecord {
+                    id: "active-art".into(),
+                    brief: "art/briefs/active-art.yaml".into(),
+                    status: AssetStatus::Requested,
+                    selection: None,
+                    approved: None,
+                    superseded_by: None,
+                },
+                AssetRecord {
+                    id: "paused-art".into(),
+                    brief: "art/briefs/paused-art.yaml".into(),
+                    status: AssetStatus::Requested,
+                    selection: None,
+                    approved: None,
+                    superseded_by: None,
+                },
+            ],
+        };
+        let story_ids = BTreeSet::from(["active".into()]);
+
+        let report = validate_for_stories(directory.path(), &registry, &story_ids);
+
+        assert!(report.issues.is_empty(), "{report:?}");
     }
 }

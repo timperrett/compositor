@@ -3,6 +3,13 @@
 Compositor is a deterministic Rust CLI for turning Markdown story manuscripts
 into incrementally maintained book-production artifacts.
 
+## Installation
+
+From this repository, install the supported 0.2.x CLI with `cargo install
+--path .`, or build it with `cargo build --release` and use
+`target/release/compositor`. Verify the installed binary with
+`compositor --version`.
+
 ## Quick start
 
 ```bash
@@ -82,23 +89,6 @@ resolved opener and spreads. Existing `.compositor/` state is unsupported: keep
 it in version control, remove it manually, and rebuild from the Flow and
 Composition Plans. Normal commands never modify source Markdown or assets.
 
-## One-time legacy migration
-
-For an existing project, use the standalone bridge before removing legacy state:
-
-```bash
-bash scripts/migrate-legacy-production-state --root /path/to/project
-bash scripts/migrate-legacy-production-state --root /path/to/project --apply
-```
-
-The first command is a dry run and prints the complete mapping report. `--apply`
-only imports unambiguous, current Flow/Composition-linked artwork; it upgrades
-briefs, records verified selections as `review`, copies verified historical
-approvals into `assets/approved/`, and writes a receipt to
-`output/reports/legacy-production-migration.json`. Apply stages its output and
-rolls back published files on failure. It never deletes, renames, or archives
-`.compositor/`; review the receipt and remove that directory manually.
-
 ## Artwork records
 
 Artwork intent, generation prompts, candidates, and feedback live in human- and
@@ -109,3 +99,9 @@ them. See `docs/art-protocol.md` for the v3 format and complete examples. Use
 `compositor art validate --strict` before generation or promotion, then
 explicitly `select`, `review`, and `approve` a candidate to copy the pinned asset
 into `assets/approved/`.
+
+Package `manifest.yaml` records the source revision, Composition edition,
+asset policy, and ordered package entries. `art/assets.yaml` is the project
+lifecycle registry; package `diagnostics.yaml` records build findings; and
+`assembly-guide.html` is the human review surface for the exact opener and
+spreads included in that package.

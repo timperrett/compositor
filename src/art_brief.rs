@@ -169,12 +169,30 @@ pub fn load(root: &Path, art_id: &str) -> Result<Option<ArtBrief>, AppError> {
         .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
     if brief.schema_version != ART_BRIEF_VERSION {
         return Err(AppError::command(format!(
-            "{} uses art brief schema {}; run the one-time migration bridge",
+            "{} uses art brief schema {}; rewrite it to schema v3 before production",
             path.display(),
             brief.schema_version
         )));
     }
     Ok(Some(brief))
+}
+
+/// Returns the source story declared in a brief without requiring the brief
+/// to pass the current schema validation. This lets project-wide commands
+/// respect source discovery scope while older paused records remain untouched.
+pub fn source_story_id(root: &Path, art_id: &str) -> Result<Option<String>, AppError> {
+    let path = path(root, art_id);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&path)?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&text)
+        .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))?;
+    Ok(value
+        .get("source")
+        .and_then(|source| source.get("story_id"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_owned))
 }
 
 pub fn save(root: &Path, brief: &ArtBrief) -> Result<(), AppError> {

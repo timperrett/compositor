@@ -23,6 +23,7 @@ pub struct Config {
 pub struct SourceConfig {
     pub compendiums_dir: String,
     pub canon_dir: String,
+    pub ignore_compendiums: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -99,6 +100,7 @@ impl Default for SourceConfig {
         Self {
             compendiums_dir: "compendiums".into(),
             canon_dir: "canon".into(),
+            ignore_compendiums: Vec::new(),
         }
     }
 }
@@ -220,6 +222,7 @@ pub const DEFAULT_CONFIG: &str = r#"schema_version = 2
 [source]
 compendiums_dir = "compendiums"
 canon_dir = "canon"
+ignore_compendiums = []
 
 [assets]
 directory = "assets"
@@ -249,3 +252,18 @@ spread_gutter_in = 0.0
 minimum_landscape_aspect_ratio = 1.3333333333333333
 
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_ignore_compendiums_deserializes() {
+        let config: Config = toml::from_str(
+            "schema_version = 2\n[source]\nignore_compendiums = [\"paused-compendium\"]\n",
+        )
+        .unwrap();
+
+        assert_eq!(config.source.ignore_compendiums, ["paused-compendium"]);
+    }
+}

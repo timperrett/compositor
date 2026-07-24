@@ -9,7 +9,6 @@ pub mod config;
 pub mod discovery;
 pub mod flow;
 pub(crate) mod markdown;
-pub mod migration;
 pub mod model;
 pub mod package;
 pub mod paragraph_ledger;

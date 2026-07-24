@@ -27,6 +27,9 @@ pub fn discover(root: &Path, config: &Config) -> Result<SourceProject, AppError>
         }
         let parsed_index = parse_document_at(&fs::read_to_string(&index)?, &index)?;
         let id = required_metadata(&parsed_index.metadata, "id", &index)?;
+        if config.source.ignore_compendiums.contains(&id) {
+            continue;
+        }
         let title = required_metadata(&parsed_index.metadata, "title", &index)?;
         let flat_sources = read_sorted(
             &directory,
@@ -118,4 +121,41 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_compendiums_listed_in_source_ignore_compendiums() {
+        let directory = tempfile::tempdir().unwrap();
+        let compendiums = directory.path().join("compendiums");
+        let active = compendiums.join("01-active");
+        let ignored = compendiums.join("02-ignored");
+        fs::create_dir_all(active.join("01-story")).unwrap();
+        fs::create_dir_all(&ignored).unwrap();
+        fs::write(
+            active.join("index.md"),
+            "---\nid: active\ntitle: Active\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            active.join("01-story/story.md"),
+            "---\nid: active-story\ntitle: Active Story\n---\n\nA short story.\n",
+        )
+        .unwrap();
+        fs::write(
+            ignored.join("index.md"),
+            "---\nid: paused\ntitle: Paused\n---\n",
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.source.ignore_compendiums = vec!["paused".into()];
+        let project = discover(directory.path(), &config).unwrap();
+
+        assert_eq!(project.compendiums.len(), 1);
+        assert_eq!(project.compendiums[0].id, "active");
+    }
 }

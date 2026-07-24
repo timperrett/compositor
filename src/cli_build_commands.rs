@@ -20,7 +20,6 @@ pub(super) fn init(
     fs::create_dir_all(root.join("assets/drafts"))?;
     fs::create_dir_all(root.join("assets/approved"))?;
     fs::create_dir_all(root.join("output/reports"))?;
-    fs::create_dir_all(root.join("output/proofs"))?;
     fs::write(config_path, DEFAULT_CONFIG)?;
     fs::write(readme_path, PROJECT_README)?;
     print_report(
@@ -55,7 +54,9 @@ Composition Plans and build a deterministic delivery package.
 - `art/briefs/` keeps creative intent, candidates, and feedback. `art/assets.yaml`
   is the sole lifecycle record for selected and approved files.
 - `output/packages/` contains generated delivery packages. Each package includes
-  an HTML assembly guide; do not edit generated output as manuscript source.
+  `manifest.yaml`, `diagnostics.yaml`, and an HTML `assembly-guide.html`; do not
+  edit generated output as manuscript source.
+- `output/reports/` contains command reports and migration receipts.
 
 ## Authoring a story
 

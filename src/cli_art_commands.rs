@@ -202,10 +202,17 @@ pub(super) fn art_command(
         }
         ArtCommand::Validate { story, strict } => {
             let project = discover(root, config)?;
+            let story_ids = project
+                .compendiums
+                .iter()
+                .flat_map(|compendium| compendium.stories.iter())
+                .filter(|source_story| story.as_deref().is_none_or(|id| id == source_story.id))
+                .map(|source_story| source_story.id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
             let mut ids = std::collections::BTreeSet::new();
             for compendium in &project.compendiums {
                 for source_story in &compendium.stories {
-                    if story.as_deref().is_none_or(|id| id == source_story.id) {
+                    if story_ids.contains(&source_story.id) {
                         ids.extend(
                             crate::art::requirements_for_story(root, config, &source_story.id)?
                                 .into_keys(),
@@ -214,13 +221,9 @@ pub(super) fn art_command(
                 }
             }
             for art_id in art_brief::ids(root)? {
-                let inspection = art_brief::inspect(root, config, &art_id);
-                if story.as_deref().is_none_or(|story_id| {
-                    inspection
-                        .brief
-                        .as_ref()
-                        .is_some_and(|brief| brief.source.story_id == story_id)
-                }) {
+                if art_brief::source_story_id(root, &art_id)?
+                    .is_some_and(|source_story_id| story_ids.contains(&source_story_id))
+                {
                     ids.insert(art_id);
                 }
             }
@@ -239,7 +242,7 @@ pub(super) fn art_command(
                     issues: validation
                         .issues
                         .into_iter()
-                        .chain(assets::validate(root, &registry).issues)
+                        .chain(assets::validate_for_stories(root, &registry, &story_ids).issues)
                         .collect(),
                 },
                 None => validation,

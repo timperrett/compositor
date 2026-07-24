@@ -17,8 +17,8 @@ candidate images, or a record that does not resolve to the current requirement.
 `source` identifies the story and authored `anchor_id`. Narrative artwork that
 is placed in a Composition Plan also declares ordered `source.spread_ids`.
 Those IDs must include every narrative spread that references the record.
-Normal production reads schema-v3 briefs only; use the one-time migration
-bridge for legacy records. Opener art uses `usage: opener`, has no
+Normal production reads schema-v3 briefs only; rewrite legacy records to this
+schema before production. Opener art uses `usage: opener`, has no
 `spread_ids`, and may only appear in the plan's separate `opener` section.
 
 `generation.prompt` is the canonical image-generation request. It can be a
