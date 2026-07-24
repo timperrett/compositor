@@ -940,31 +940,36 @@ fn build_conventional_packages(
                             .expect("story directory always has a name"),
                     )
             });
-        validation.issues.extend(
-            build_package(
-                root,
-                config,
-                &story_path,
-                &flow_path,
-                &composition_path,
-                &design_system,
-                &assets_path,
-                &output,
-                request.replace,
-                request.policy,
-                request.strict_art,
-            )?
-            .issues,
-        );
+        let story_validation = build_package(
+            root,
+            config,
+            &story_path,
+            &flow_path,
+            &composition_path,
+            &design_system,
+            &assets_path,
+            &output,
+            request.replace,
+            request.policy,
+            request.strict_art,
+        )?;
+        let story_can_proceed = story_validation.can_proceed();
+        validation.issues.extend(story_validation.issues);
+        if !story_can_proceed {
+            break;
+        }
         outputs.push(relative_path(root, &output));
     }
     print_report(
         request.format,
         "build",
-        PackageBuildOutput { revision, outputs },
+        PackageBuildOutput {
+            revision: validation.can_proceed().then_some(revision).flatten(),
+            outputs,
+        },
         validation.clone(),
     )?;
-    if validation.can_proceed() || !request.strict_art {
+    if validation.can_proceed() {
         Ok(())
     } else {
         Err(AppError::Validation)
@@ -1023,7 +1028,7 @@ fn build_package(
         .issues
         .extend(composition::validate_story_title(&story, &composition_plan).issues);
     if !report.can_proceed() {
-        return Err(AppError::Validation);
+        return Ok(report);
     }
     let registry = assets::load_from(assets_path)?
         .ok_or_else(|| AppError::command("asset registry does not exist".into()))?;

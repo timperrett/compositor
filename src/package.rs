@@ -97,7 +97,7 @@ pub fn build(
 ) -> Result<ValidationReport, AppError> {
     let registry_report = assets::validate(root, registry);
     if policy.strict && !registry_report.can_proceed() {
-        return Err(AppError::Validation);
+        return Ok(registry_report);
     }
     // Non-strict packages remain story-scoped: only their resolved records are
     // hard gates. `art validate` remains the complete shared-registry audit.
@@ -263,7 +263,7 @@ pub fn build(
             .map_err(|error| AppError::serialization(error.to_string()))?,
     )?;
     if !report.can_proceed() {
-        return Err(AppError::Validation);
+        return Ok(report);
     }
     if output.exists() && !replace {
         return Err(AppError::command(format!(
@@ -1028,10 +1028,17 @@ fn resolve_asset(
         }
     }
     if !assets::allowed(record.status, resolution.policy.minimum) {
+        let current_status = asset_status_name(record.status);
+        let policy_status = asset_status_name(resolution.policy.minimum);
         return Ok(unresolved(
             asset,
             "ART_STATUS_BELOW_POLICY",
-            "asset status is below the build policy",
+            &format!(
+                "asset `{}` is `{current_status}`; --asset-policy {policy_status} requires a selected asset at {} status. Select a candidate with `compositor art select {} <candidate-id>`",
+                asset.id,
+                accepted_statuses(resolution.policy.minimum),
+                asset.id,
+            ),
             report,
         ));
     }
@@ -1102,6 +1109,26 @@ fn resolve_asset(
         art_layout,
         geometry,
     })
+}
+
+fn asset_status_name(status: AssetStatus) -> &'static str {
+    match status {
+        AssetStatus::Requested => "requested",
+        AssetStatus::Draft => "draft",
+        AssetStatus::Review => "review",
+        AssetStatus::Approved => "approved",
+        AssetStatus::Rejected => "rejected",
+        AssetStatus::Superseded => "superseded",
+    }
+}
+
+fn accepted_statuses(minimum: AssetStatus) -> &'static str {
+    match minimum {
+        AssetStatus::Draft => "draft, review, or approved",
+        AssetStatus::Review => "review or approved",
+        AssetStatus::Approved => "approved",
+        AssetStatus::Requested | AssetStatus::Rejected | AssetStatus::Superseded => "a placeable",
+    }
 }
 
 fn unresolved(
@@ -1290,6 +1317,69 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "ART_RECORD_INVALID"));
+    }
+
+    #[test]
+    fn reports_requested_art_below_the_draft_policy_with_a_selection_action() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("art/briefs")).unwrap();
+        let story_path = directory.path().join("story.md");
+        fs::write(
+            &story_path,
+            "---\nid: story\ntitle: Story\n---\n<!-- anchor: scene -->\n<!-- paragraph: opening -->\n\nOnce upon a time.\n",
+        )
+        .unwrap();
+        let story = flow::load_story(&story_path).unwrap();
+        fs::write(
+            directory.path().join("art/briefs/story-art.yaml"),
+            "schema_version: 3\nart_id: story-art\nsource: { story_id: story, anchor_id: scene, spread_ids: [spread-001] }\ngeneration: { page_treatment: floating, prompt: A scene. }\n",
+        )
+        .unwrap();
+        let registry = AssetRegistry {
+            schema: crate::assets::ASSET_REGISTRY_SCHEMA.into(),
+            assets: vec![AssetRecord {
+                id: "story-art".into(),
+                brief: "art/briefs/story-art.yaml".into(),
+                status: AssetStatus::Requested,
+                selection: None,
+                approved: None,
+                superseded_by: None,
+            }],
+        };
+        let mut report = ValidationReport::default();
+        let manifest = resolve_asset(
+            directory.path(),
+            &registry,
+            &ArtReference {
+                id: "story-art".into(),
+                role: "primary-subject".into(),
+            },
+            AssetResolution {
+                story: &story,
+                config: &Config::default(),
+                expected_usage: ArtUsage::Story,
+                expected_spread_id: Some("spread-001"),
+                destination: directory.path(),
+                policy: PackagePolicy {
+                    minimum: AssetStatus::Draft,
+                    strict: false,
+                },
+            },
+            &mut report,
+        )
+        .unwrap();
+
+        assert!(!manifest.resolved);
+        let issue = report
+            .issues
+            .iter()
+            .find(|issue| issue.code == "ART_STATUS_BELOW_POLICY")
+            .expect("requested art must be rejected by the draft policy");
+        assert!(issue.message.contains("asset `story-art` is `requested`"));
+        assert!(issue.message.contains("--asset-policy draft"));
+        assert!(issue
+            .message
+            .contains("compositor art select story-art <candidate-id>"));
     }
 
     #[test]

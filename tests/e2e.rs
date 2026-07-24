@@ -196,6 +196,66 @@ fn package_build_emits_a_flow_composition_assembly_guide() {
 }
 
 #[test]
+fn package_build_reports_requested_art_policy_failures_before_exiting() {
+    let directory = package_project();
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "build",
+            "magic",
+            "--asset-policy",
+            "draft",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ART_STATUS_BELOW_POLICY"), "{stdout}");
+    assert!(
+        stdout.contains("asset `opener-art` is `requested`"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("compositor art select opener-art <candidate-id>"),
+        "{stdout}"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("validation failed"));
+    assert!(!directory
+        .path()
+        .join("output/packages/magic/r01/01-story")
+        .exists());
+
+    let json_directory = package_project();
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            json_directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "build",
+            "magic",
+            "--asset-policy",
+            "draft",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["revision"], serde_json::Value::Null);
+    assert_eq!(report["data"]["outputs"], serde_json::json!([]));
+    assert!(report["validation"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "ART_STATUS_BELOW_POLICY"));
+    assert!(!json_directory
+        .path()
+        .join("output/packages/magic/r01/01-story")
+        .exists());
+}
+
+#[test]
 fn explicit_output_requires_replace() {
     let directory = package_project();
     make_opener_art_ready(&directory);
