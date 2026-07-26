@@ -10,6 +10,23 @@ From this repository, install the supported 0.2.x CLI with `cargo install
 `target/release/compositor`. Verify the installed binary with
 `compositor --version`.
 
+## Dependency licenses
+
+Compositor is licensed under Apache-2.0. The committed
+`THIRD_PARTY_NOTICES.html` records license texts for the locked dependency
+graph and is included when packaging the crate. Before changing dependencies,
+install `cargo-about` and `cargo-deny`, then run:
+
+```bash
+make notices
+make licenses-check
+```
+
+`make notices` refreshes the notice artifact; `make licenses-check` verifies
+both the allowed-license policy and that the artifact is current. `about.toml`
+is the single source of truth for accepted licenses; the check derives Cargo
+Deny's configuration from it.
+
 ## Quick start
 
 ```bash

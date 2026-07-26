@@ -1,9 +1,11 @@
-.PHONY: build clean site-bootstrap site-build site-clean site-tools-clean
+.PHONY: build clean licenses notices licenses-check site-bootstrap site-build site-clean site-tools-clean
 
 SITE_DIR := website
 SITE_DIST := $(SITE_DIR)/dist
 SITE_TOOLS := $(SITE_DIR)/.tools
 TAILWIND_VERSION := 4.3.3
+LICENSE_CONFIG_DIR := target/license-config
+DENY_LICENSE_CONFIG := $(LICENSE_CONFIG_DIR)/deny.toml
 
 HOST_OS := $(shell uname -s)
 HOST_ARCH := $(shell uname -m)
@@ -31,6 +33,21 @@ TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/v$
 
 build:
 	cargo build --release
+
+licenses: $(DENY_LICENSE_CONFIG)
+	cargo deny --config $(DENY_LICENSE_CONFIG) check licenses
+
+$(DENY_LICENSE_CONFIG): about.toml scripts/render-deny-license-config.sh
+	@mkdir -p "$(LICENSE_CONFIG_DIR)"
+	bash scripts/render-deny-license-config.sh about.toml "$(DENY_LICENSE_CONFIG)"
+
+notices:
+	cargo about generate licenses/third-party-notices.hbs --locked --fail --output-file THIRD_PARTY_NOTICES.html
+
+licenses-check: licenses
+	@mkdir -p target
+	cargo about generate licenses/third-party-notices.hbs --locked --fail --output-file target/THIRD_PARTY_NOTICES.html
+	@cmp -s THIRD_PARTY_NOTICES.html target/THIRD_PARTY_NOTICES.html || { echo "THIRD_PARTY_NOTICES.html is stale; run 'make notices'." >&2; exit 1; }
 
 clean:
 	rm -rf target

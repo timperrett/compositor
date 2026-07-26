@@ -1,0 +1,47 @@
+<!--
+Copyright 2020-2024, Embark Studios
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Compositor third-party notices</title>
+    <style>
+      body { color: #1f2937; font-family: system-ui, sans-serif; line-height: 1.5; margin: 0; }
+      main { margin: 0 auto; max-width: 70rem; padding: 2rem; }
+      .license-text { max-height: 24rem; overflow: auto; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Compositor third-party notices</h1>
+      <p>This document lists the licenses for Rust crates in the locked Compositor dependency graph.</p>
+
+      <h2>License overview</h2>
+      <ul>
+        {{#each overview}}
+        <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+        {{/each}}
+      </ul>
+
+      <h2>License texts</h2>
+      {{#each licenses}}
+      <section>
+        {{#if first_of_kind}}
+        <h3 id="{{id}}">{{name}}</h3>
+        {{/if}}
+        <h4>{{name}}</h4>
+        <p>Used by:</p>
+        <ul>
+          {{#each used_by}}
+          <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+          {{/each}}
+        </ul>
+        <pre class="license-text">{{text}}</pre>
+      </section>
+      {{/each}}
+    </main>
+  </body>
+</html>
