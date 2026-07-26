@@ -244,7 +244,8 @@ fn art_dashboard_marks_review_and_approved_art_ready() {
     let html =
         fs::read_to_string(directory.path().join("output/reports/art-dashboard.html")).unwrap();
     assert!(html.contains(">approved<"));
-    assert!(html.contains("<strong>0</strong><span>required blockers</span>"));
+    assert!(!html.contains("Make the next art decision legible."));
+    assert!(!html.contains("required art meets draft policy"));
 }
 
 #[test]

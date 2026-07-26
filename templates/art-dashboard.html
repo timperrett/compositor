@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compositor art dashboard</title>
+    <style>
+      :root { color: #1f211e; background: #f6f1e8; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-synthesis: none; }
+      * { box-sizing: border-box; }
+      body { min-width: 320px; margin: 0; background-color: #f6f1e8; background-image: radial-gradient(rgba(80, 66, 49, .09) .55px, transparent .55px); background-size: 7px 7px; color: #1f211e; line-height: 1.5; text-rendering: optimizeLegibility; }
+      a { color: inherit; }
+      a:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #a34e32; outline-offset: 3px; }
+      .shell { width: min(100% - 2rem, 76rem); margin-inline: auto; }
+      .site-header { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #d7cdbf; background: rgba(246, 241, 232, .95); backdrop-filter: blur(8px); }
+      .site-header .shell { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 4rem; }
+      .brand { font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif; font-size: 1.45rem; letter-spacing: -.03em; }
+      .product-label { margin: 0; color: #4d504a; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+      .filter-panel { margin-top: 2.25rem; padding: 1.3rem 1.5rem 1.5rem; border: 1px solid #d7cdbf; background: rgba(251, 247, 239, .65); box-shadow: 0 14px 34px rgba(45, 38, 28, .08); }
+      .rule-label { display: flex; align-items: center; gap: .7rem; margin: 0; color: #58705d; font-size: .7rem; font-weight: 700; letter-spacing: .14em; line-height: 1.2; text-transform: uppercase; }
+      .rule-label::after { flex: 1; height: 1px; content: ""; background: #d7cdbf; }
+      .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 1rem; margin-top: 1.25rem; }
+      .filters label { display: grid; gap: .4rem; color: #4d504a; font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+      .filters select { width: 100%; padding: .65rem .7rem; border: 1px solid #bcae9c; background: #fffaf2; color: #1f211e; font: inherit; letter-spacing: normal; text-transform: none; }
+      .checkbox { display: flex !important; grid-template-columns: auto 1fr; align-items: center; gap: .55rem; }
+      .checkbox input { width: 1rem; height: 1rem; accent-color: #a34e32; }
+      .records { margin-top: 3.5rem; }
+      .story { margin: 2.5rem 0; }
+      .story h2 { margin: 0 0 1rem; font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif; font-size: clamp(1.8rem, 4vw, 2.7rem); font-weight: 600; letter-spacing: -.035em; line-height: 1.08; }
+      .card { margin: .9rem 0; padding: 1.3rem; border: 1px solid #d7cdbf; border-left: 4px solid #7a8076; background: rgba(255, 252, 246, .82); box-shadow: 0 8px 18px rgba(45, 38, 28, .06); }
+      .card.ready { border-left-color: #58705d; }
+      .card.blocked { border-left-color: #a34e32; }
+      .card.orphan { border-left-color: #7a6249; }
+      .card h3 { margin: 0; font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; font-size: 1.55rem; line-height: 1.1; }
+      .badges { display: flex; flex-wrap: wrap; gap: .45rem; margin: .8rem 0; }
+      .badge { display: inline-block; padding: .18rem .45rem; border: 1px solid #d7cdbf; background: #f6f1e8; color: #4d504a; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
+      .meta { margin: .35rem 0; color: #565850; font-size: .88rem; }
+      .meta a { color: #58705d; text-decoration-color: #a34e32; text-underline-offset: .2rem; }
+      .candidates { display: flex; gap: .8rem; flex-wrap: wrap; margin: 1rem 0; }
+      .candidate { display: block; max-width: 180px; padding: .35rem; border: 1px solid #d7cdbf; background: #f6f1e8; text-decoration: none; }
+      .candidate:hover { border-color: #a34e32; }
+      .candidate.selected { border: 2px solid #58705d; }
+      .candidate img { display: block; width: 170px; max-width: 100%; height: 130px; object-fit: contain; background: #fffaf2; }
+      .candidate small { display: block; margin-top: .3rem; color: #565850; font-size: .67rem; }
+      code { overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .83em; }
+      .action { margin: .9rem 0 0; padding: .75rem .85rem; border-left: 2px solid #a34e32; background: #f3ebdf; }
+      .empty { color: #686961; }
+      details { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid #d7cdbf; }
+      summary { cursor: pointer; font-weight: 700; }
+      details ul { padding-left: 1.25rem; color: #4d504a; }
+      @media (max-width: 640px) { .site-header .shell { align-items: flex-start; flex-direction: column; justify-content: center; padding-block: .65rem; } .filter-panel { padding: 1rem; } .card { padding: 1rem; } }
+    </style>
+  </head>
+  <body>
+    <header class="site-header"><div class="shell"><div class="brand">Compositor</div><p class="product-label">Art dashboard · local report</p></div></header>
+    <main class="shell">
+      <section class="filter-panel">
+        <p class="rule-label">Filter artwork</p>
+        <div class="filters">
+          <label>Compendium<select id="compendium"><option value="">All compendiums</option>{% for compendium in compendiums %}<option value="{{ compendium }}">{{ compendium }}</option>{% endfor %}</select></label>
+          <label>Story<select id="story"><option value="">All stories</option>{% for story in stories %}<option value="{{ story }}">{{ story }}</option>{% endfor %}</select></label>
+          <label>Lifecycle<select id="lifecycle"><option value="">All lifecycle states</option><option value="unregistered">Unregistered</option><option value="requested">Requested</option><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="superseded">Superseded</option></select></label>
+          <label>Readiness<select id="readiness"><option value="">All readiness</option>{% for label in readiness_labels %}<option value="{{ label }}">{{ label }}</option>{% endfor %}</select></label>
+          <label class="checkbox"><input id="blockers" type="checkbox" />Required blockers only</label>
+        </div>
+      </section>
+      <section class="records">
+        <p class="rule-label">Artwork records</p>
+        {% for group in story_groups %}
+        <section class="story">
+          <h2>{{ group.name }}</h2>
+          {% for entry in group.entries %}
+          <article class="card {{ entry.card_class }}" data-compendium="{{ entry.compendium }}" data-story="{{ entry.story }}" data-lifecycle="{{ entry.lifecycle }}" data-readiness="{{ entry.readiness }}" data-blocker="{{ entry.blocker }}">
+            <h3>{{ entry.art_id }}</h3>
+            <p class="badges"><span class="badge">{{ entry.lifecycle }}</span><span class="badge">{{ entry.readiness }}</span>{% if entry.required %}<span class="badge">required</span>{% else %}<span class="badge">unplaced/orphan</span>{% endif %}</p>
+            <p class="meta">Compendium: {{ entry.compendium }} · placement: {{ entry.placement }} · candidates: {{ entry.candidate_count }} · brief: <a href="{{ entry.art_brief_url }}">{{ entry.art_brief }}</a></p>
+            {% if entry.has_selected_file %}<p class="meta">Selected: <code>{{ entry.selected_file }}</code></p>{% endif %}
+            {% if entry.has_approved_artwork %}<p class="meta">Approved: <code>{{ entry.approved_artwork }}</code></p>{% endif %}
+            {% if entry.has_candidates %}
+            <div class="candidates">{% for candidate in entry.candidates %}<a class="candidate{% if candidate.selected %} selected{% endif %}" href="{{ candidate.url }}"><img src="{{ candidate.url }}" alt="Candidate {{ candidate.id }} for {{ entry.art_id }}" /><code>{{ candidate.id }}</code><small>{{ candidate.file }}</small></a>{% endfor %}</div>
+            {% else %}<p class="empty">No candidate files are registered in this brief.</p>{% endif %}
+            <p class="action"><strong>Next action:</strong> <code>{{ entry.next_action }}</code></p>
+            {% if entry.has_diagnostics %}<details><summary>Diagnostics</summary><ul>{% for diagnostic in entry.diagnostics %}<li><strong>{{ diagnostic.severity }}</strong> [{{ diagnostic.code }}] {{ diagnostic.message }}</li>{% endfor %}</ul></details>{% endif %}
+          </article>
+          {% endfor %}
+        </section>
+        {% endfor %}
+      </section>
+    </main>
+    <script>
+      const controls = Object.fromEntries(['compendium', 'story', 'lifecycle', 'readiness', 'blockers'].map((id) => [id, document.getElementById(id)]));
+      function filter() {
+        const { compendium, story, lifecycle, readiness, blockers } = controls;
+        document.querySelectorAll('.card').forEach((card) => {
+          const show = (!compendium.value || card.dataset.compendium === compendium.value) && (!story.value || card.dataset.story === story.value) && (!lifecycle.value || card.dataset.lifecycle === lifecycle.value) && (!readiness.value || card.dataset.readiness === readiness.value) && (!blockers.checked || card.dataset.blocker === 'true');
+          card.hidden = !show;
+        });
+        document.querySelectorAll('.story').forEach((section) => { section.hidden = !Array.from(section.querySelectorAll('.card')).some((card) => !card.hidden); });
+      }
+      Object.values(controls).forEach((control) => control.addEventListener('change', filter));
+    </script>
+  </body>
+</html>
