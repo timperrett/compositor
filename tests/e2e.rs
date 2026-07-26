@@ -103,6 +103,151 @@ fn init_creates_reports_but_not_removed_proof_output() {
 }
 
 #[test]
+fn art_dashboard_reports_readiness_without_changing_art_state() {
+    let directory = package_project();
+    make_opener_art_ready(&directory);
+    fs::write(
+        directory.path().join("art/assets.yaml"),
+        "schema: compositor.dev/art-assets/v2\nassets:\n  - id: opener-art\n    brief: art/briefs/opener-art.yaml\n    status: requested\n",
+    )
+    .unwrap();
+    let before = fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "dashboard",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["blocker_count"], 1);
+    assert_eq!(
+        report["data"]["output"],
+        "output/reports/art-dashboard.html"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("art/assets.yaml")).unwrap(),
+        before
+    );
+    let html =
+        fs::read_to_string(directory.path().join("output/reports/art-dashboard.html")).unwrap();
+    assert!(html.contains("needs selection"));
+    assert!(html.contains("compositor art select opener-art a"));
+    assert!(html.contains("../../assets/drafts/opener-art/a.png"));
+    assert!(html.contains("id=\"compendium\""));
+    assert!(html.contains("<option value=\"magic\">magic</option>"));
+    assert!(html.contains("data-compendium=\"magic\""));
+    assert!(html.contains("Iowan Old Style"));
+
+    let list = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(list["data"][0]["registry_status"], "requested");
+    assert_eq!(list["data"][0]["readiness"], "needs selection");
+    assert_eq!(list["data"][0]["default_policy_ready"], false);
+}
+
+#[test]
+fn art_dashboard_supports_explicit_output_and_lifecycle_diagnostics() {
+    let directory = package_project();
+    make_opener_art_ready(&directory);
+    let candidate = directory.path().join("assets/drafts/opener-art/a.png");
+    image::RgbImage::new(2, 1).save(&candidate).unwrap();
+    let registry_path = directory.path().join("art/assets.yaml");
+    let mut registry = fs::read_to_string(&registry_path).unwrap();
+    registry.push_str(
+        "  - id: missing-brief\n    brief: art/briefs/missing-brief.yaml\n    status: requested\n",
+    );
+    fs::write(&registry_path, registry).unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "dashboard",
+            "--output",
+            "reports/nested/dashboard.html",
+        ])
+        .output()
+        .unwrap();
+    assert!(invalid.status.success());
+    let html = fs::read_to_string(directory.path().join("reports/nested/dashboard.html")).unwrap();
+    assert!(html.contains("invalid record"));
+    assert!(html.contains("missing brief"));
+    assert!(html.contains("unplaced/orphan"));
+    assert!(html.contains("../../assets/drafts/opener-art/a.png"));
+
+    let escape = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "dashboard",
+            "--output",
+            "../dashboard.html",
+        ])
+        .output()
+        .unwrap();
+    assert!(!escape.status.success());
+    assert!(String::from_utf8_lossy(&escape.stderr).contains("project-relative"));
+}
+
+#[test]
+fn art_dashboard_marks_review_and_approved_art_ready() {
+    let directory = package_project();
+    make_opener_art_ready(&directory);
+    let binary = env!("CARGO_BIN_EXE_compositor");
+    for command in [
+        ["art", "review", "opener-art"],
+        ["art", "approve", "opener-art"],
+    ] {
+        let output = Command::new(binary)
+            .args(["--root", directory.path().to_str().unwrap()])
+            .args(command)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = Command::new(binary)
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "dashboard",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let html =
+        fs::read_to_string(directory.path().join("output/reports/art-dashboard.html")).unwrap();
+    assert!(html.contains(">approved<"));
+    assert!(html.contains("<strong>0</strong><span>required blockers</span>"));
+}
+
+#[test]
 fn website_uses_current_review_surface_terms() {
     let website = fs::read_to_string("website/index.html").unwrap();
     assert!(website.contains("assembly-guide.html"));

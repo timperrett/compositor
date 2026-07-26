@@ -18,6 +18,9 @@ struct ArtListItem {
     candidate_count: usize,
     selected_candidate: Option<String>,
     approved_artwork: Option<String>,
+    registry_status: Option<AssetStatus>,
+    default_policy_ready: bool,
+    readiness: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +117,21 @@ pub(super) fn art_command(
             transition_asset(root, config, format, &art_id, AssetStatus::Review)
         }
         ArtCommand::Approve { art_id } => approve_asset(root, config, format, &art_id),
+        ArtCommand::Dashboard { output } => {
+            let destination = crate::art_dashboard::resolve_output(root, &output)?;
+            let dashboard = crate::art_dashboard::analyze(root, config)?;
+            crate::art_dashboard::write_html(root, &destination, &dashboard)?;
+            print_report(
+                format,
+                "art dashboard",
+                crate::art_dashboard::DashboardOutput::from_dashboard(
+                    root,
+                    &destination,
+                    &dashboard,
+                ),
+                ValidationReport::default(),
+            )
+        }
         ArtCommand::Reject { art_id } => {
             transition_asset(root, config, format, &art_id, AssetStatus::Rejected)
         }
@@ -146,6 +164,9 @@ pub(super) fn art_command(
                         let asset = registry
                             .as_ref()
                             .and_then(|registry| assets::record(registry, &art_id));
+                        let readiness = crate::art_dashboard::readiness_for(
+                            root, config, &art_id, true, asset, &brief,
+                        );
                         records.push(ArtListItem {
                             art_id,
                             story_id: requirement.story_id,
@@ -172,6 +193,9 @@ pub(super) fn art_command(
                                     .as_ref()
                                     .map(|approved| approved.file.clone())
                             }),
+                            registry_status: asset.map(|asset| asset.status),
+                            default_policy_ready: readiness.default_policy_ready,
+                            readiness: readiness.label.to_string(),
                         });
                     }
                 }

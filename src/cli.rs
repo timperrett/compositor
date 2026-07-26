@@ -230,6 +230,14 @@ enum ArtCommand {
         #[arg(long)]
         edition: String,
     },
+    /// Write a project-wide HTML report of artwork lifecycle readiness.
+    ///
+    /// Example: `compositor art dashboard`
+    Dashboard {
+        /// Project-relative destination for the HTML report.
+        #[arg(long, default_value = "output/reports/art-dashboard.html")]
+        output: PathBuf,
+    },
     /// Copy a generated image into the brief as a geometry-checked candidate.
     ///
     /// Candidates that do not match the current requirement geometry are kept

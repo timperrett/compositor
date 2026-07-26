@@ -95,6 +95,12 @@ to inspect the opener separately and identify each narrative spread as covered,
 missing, or invalid. Story art referenced by a
 Composition Plan must declare that spread in `source.spread_ids`.
 
+Use `compositor art dashboard` to write a project-wide, read-only HTML art
+review report at `output/reports/art-dashboard.html`. It groups required art by
+story, shows candidates, lifecycle state, default draft-policy readiness, and
+the exact next lifecycle command. `art validate` and strict package builds
+remain the authoritative checks.
+
 ## Package builds
 
 Build delivery packages by naming a compendium, with an optional story target:

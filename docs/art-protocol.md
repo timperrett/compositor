@@ -43,8 +43,12 @@ and editorial note; selection is deliberately not a brief field.
    Composition Plan reference.
 4. Run Flow, Composition, coverage, and strict art validation.
 5. The rendering skill writes candidate files and adds them to that record.
-6. Run `compositor art select <art-id> <candidate-id>`, then `compositor art review <art-id>`.
-7. Run `compositor art approve <art-id>` to validate the reviewed selection,
+6. Run `compositor art dashboard` to write `output/reports/art-dashboard.html`.
+   It is a read-only, project-wide review surface that shows whether each
+   required record meets the default draft package policy and gives its next
+   lifecycle command. It does not replace strict validation or a package build.
+7. Run `compositor art select <art-id> <candidate-id>`, then `compositor art review <art-id>`.
+8. Run `compositor art approve <art-id>` to validate the reviewed selection,
    copy it into `assets/approved/`, and pin its SHA-256 in `art/assets.yaml`.
 
 ## Examples
