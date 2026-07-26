@@ -52,7 +52,7 @@ licenses-check: licenses
 clean:
 	rm -rf target
 
-site-bootstrap: $(TAILWIND_BINARY)
+website-bootstrap: $(TAILWIND_BINARY)
 
 $(TAILWIND_BINARY):
 	@command -v curl >/dev/null || { echo "curl is required to fetch Tailwind" >&2; exit 1; }
@@ -60,7 +60,7 @@ $(TAILWIND_BINARY):
 	curl --fail --location --retry 3 --silent --show-error "$(TAILWIND_URL)" --output "$@"
 	chmod +x "$@"
 
-site-build: site-bootstrap
+website: site-bootstrap
 	rm -rf "$(SITE_DIST)"
 	mkdir -p "$(SITE_DIST)/assets"
 	cp "$(SITE_DIR)/index.html" "$(SITE_DIST)/index.html"
