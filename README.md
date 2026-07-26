@@ -1,7 +1,26 @@
 # Compositor
 
-Compositor is a deterministic Rust CLI for turning Markdown story manuscripts
-into incrementally maintained book-production artifacts.
+Compositor is a deterministic, Markdown-first Rust CLI for moving story
+manuscripts toward a clear, reviewable book-production handoff. It keeps the
+manuscript readable, makes production decisions explicit, and creates
+revisioned packages that a layout application can use without taking over the
+creative work.
+
+Its goal is to make the path from manuscript to layout legible and repeatable:
+authors retain editorial control, people or AI skills can propose structured
+Flow, Composition, and artwork records, and Compositor checks their links,
+coverage, freshness, and production constraints. It records what was built
+from which source and approved assets, so review findings can be acted on
+without silently turning suggestions into decisions.
+
+The workflow is deliberately staged: write the story in Markdown; sync it into
+stable source records; draft and validate the Flow and Composition Plans; then
+select, review, and approve any artwork before building a revisioned package
+and assembly guide. Compositor validates and packages those decisions, while
+final styling, page separation, and typesetting remain the responsibility of
+the design system and layout application.
+
+Learn more at the [Compositor project site](https://timperrett.github.io/compositor/).
 
 ## Installation
 
