@@ -88,8 +88,7 @@ include `art`, `layout`, `keep-with-next`, and `unit`; see `compositor --help`.
    and `compositor art validate`.
 3. Register candidates in a brief, then `art select`, `art review`, and
    `art approve` when an approved asset is required.
-4. Run `compositor art dashboard` to write the project-wide HTML art review
-   report at `output/reports/art-dashboard.html`.
+4. Run `compositor art serve` to review project-wide artwork locally.
 5. Run `compositor build <compendium> [story]`. Its `assembly-guide.html` is
    the review surface and uses the same Flow, Composition, and art resolution
    as the package.

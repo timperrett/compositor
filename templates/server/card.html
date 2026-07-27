@@ -1,0 +1,32 @@
+<article class="card {{ entry.card_class }}" data-compendium="{{ entry.compendium }}" data-story="{{ entry.story }}" data-lifecycle="{{ entry.lifecycle }}" data-readiness="{{ entry.readiness }}" data-blocker="{{ entry.blocker }}">
+  <h3>{{ entry.art_id }}</h3>
+  <p class="badges"><span class="badge">{{ entry.lifecycle }}</span>{% if entry.required %}<span class="badge">{{ entry.readiness }}</span><span class="badge">required</span>{% else %}<span class="badge">unplaced/orphan</span>{% endif %}{% if entry.approved %}<span class="badge">approved artwork</span>{% endif %}</p>
+  <p class="meta">Compendium: {{ entry.compendium }} · placement: {{ entry.placement }} · candidates: {{ entry.candidate_count }}</p>
+  <section class="decision-panel">
+    <h4>Next action</h4>
+    {% if entry.can_select %}
+    <form data-async-action method="post" action="/art/{{ entry.art_id }}/select">
+      <input type="hidden" name="csrf" value="{{ csrf }}" />
+      <fieldset><legend>Choose candidate</legend><div class="candidate-choices">{% for candidate in entry.candidates %}
+        <label class="candidate-choice"><input type="radio" name="candidate_id" value="{{ candidate.id }}" required /><img loading="lazy" src="{{ candidate.url }}" alt="Candidate {{ candidate.id }} for {{ entry.art_id }}" /><small>{{ candidate.id }}</small></label>
+      {% endfor %}</div></fieldset>
+      <button class="button" type="submit">Select candidate</button>
+    </form>
+    {% else if entry.can_review %}
+      {% if entry.has_selected_candidate %}<p class="selected-art"><img loading="lazy" src="{{ entry.selected_candidate_url }}" alt="Selected candidate {{ entry.selected_candidate_id }} for {{ entry.art_id }}" />Selected candidate {{ entry.selected_candidate_id }}</p>{% endif %}
+      <form data-async-action method="post" action="/art/{{ entry.art_id }}/review"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="button" type="submit">Send to review</button></form>
+    {% else if entry.can_approve %}
+      {% if entry.has_selected_candidate %}<p class="selected-art"><img loading="lazy" src="{{ entry.selected_candidate_url }}" alt="Selected candidate {{ entry.selected_candidate_id }} for {{ entry.art_id }}" />Selected candidate {{ entry.selected_candidate_id }}</p>{% endif %}
+      <div class="actions"><form data-async-action method="post" action="/art/{{ entry.art_id }}/approve" onsubmit="return confirm('Approve the selected candidate for {{ entry.art_id }}?');"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="button" type="submit">Approve</button></form><form data-async-action method="post" action="/art/{{ entry.art_id }}/reject"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="button danger" type="submit">Reject</button></form></div>
+    {% else %}
+      {% if entry.approved %}<p class="approved-art"><img loading="lazy" src="{{ entry.approved_url }}" alt="Approved artwork for {{ entry.art_id }}" />Approved artwork</p>{% endif %}
+      <p class="guidance">{{ entry.guidance }}</p>
+    {% endif %}
+    {% if entry.can_unplace %}
+      <form class="not-needed" data-async-action method="post" action="/art/{{ entry.art_id }}/unplace" onsubmit="return confirm('Remove {{ entry.art_id }} from its Composition placement? Its artwork files and history will remain on disk.');"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="button secondary" type="submit">Not needed</button></form>
+    {% else if entry.opener_art %}
+      <p class="guidance">Opener artwork is required by the Composition plan; replace its opener reference instead.</p>
+    {% endif %}
+    <p class="action-error" role="alert" hidden></p>
+  </section>
+</article>

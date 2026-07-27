@@ -2,6 +2,17 @@ use compositor::config::DEFAULT_CONFIG;
 use std::fs;
 use std::process::Command;
 
+#[cfg(unix)]
+use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use std::process::Child;
+#[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::Duration;
+
 fn package_project() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("compositor.toml"), DEFAULT_CONFIG).unwrap();
@@ -69,6 +80,47 @@ fn package_project() -> tempfile::TempDir {
     directory
 }
 
+#[cfg(unix)]
+fn unused_local_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[cfg(unix)]
+fn wait_for_server(child: &mut Child, lock_path: &Path, port: u16) {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    for _ in 0..100 {
+        if lock_path.exists()
+            && TcpStream::connect_timeout(&address, Duration::from_millis(10)).is_ok()
+        {
+            return;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("art server exited before accepting connections: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("art server did not start within one second");
+}
+
+#[cfg(unix)]
+fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
+    for _ in 0..100 {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("art server did not exit within one second");
+}
+
 #[test]
 fn cli_reports_the_build_version_and_omits_legacy_commands() {
     let binary = env!("CARGO_BIN_EXE_compositor");
@@ -78,10 +130,48 @@ fn cli_reports_the_build_version_and_omits_legacy_commands() {
     let help = Command::new(binary).arg("--help").output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
-    for command in ["plan", "proof", "resolve", "reconcile", "diff"] {
+    for command in ["dashboard", "plan", "proof", "resolve", "reconcile", "diff"] {
         assert!(
             !help.contains(&format!("\n  {command} ")),
             "legacy command {command} remains visible"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn art_server_gracefully_handles_unix_shutdown_signals() {
+    for signal in ["INT", "TERM", "HUP"] {
+        let directory = package_project();
+        let port = unused_local_port();
+        let lock_path = directory.path().join("output/locks/compositor-server.lock");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_compositor"))
+            .args([
+                "--root",
+                directory.path().to_str().unwrap(),
+                "art",
+                "serve",
+                "--port",
+                &port.to_string(),
+            ])
+            .spawn()
+            .unwrap();
+        wait_for_server(&mut child, &lock_path, port);
+
+        let status = Command::new("kill")
+            .args(["-s", signal, &child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success(), "could not send SIG{signal}");
+
+        let status = wait_for_exit(&mut child);
+        assert!(
+            status.success(),
+            "server did not exit cleanly after SIG{signal}: {status}"
+        );
+        assert!(
+            !lock_path.exists(),
+            "lock remains after graceful shutdown from SIG{signal}"
         );
     }
 }
@@ -103,6 +193,78 @@ fn init_creates_reports_but_not_removed_proof_output() {
 }
 
 #[test]
+fn art_unplace_removes_a_spread_requirement_without_touching_art_history() {
+    let directory = package_project();
+    let composition = directory
+        .path()
+        .join("compendiums/01-magic/01-story/hardcover.composition.yaml");
+    let original = fs::read_to_string(&composition).unwrap();
+    fs::write(
+        &composition,
+        original.replace(
+            "    illustration: { mode: none, focal_subject: none }\n",
+            "    illustration: { mode: none, focal_subject: none }\n    art_assets:\n      - id: supporting-spot\n        role: supporting-detail\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("art/briefs/supporting-spot.yaml"),
+        "schema_version: 3\nart_id: supporting-spot\nsource:\n  story_id: story\n  anchor_id: opening\n  spread_ids: [spread-001]\ngeneration:\n  page_treatment: floating\n  prompt: A supporting spot.\n",
+    )
+    .unwrap();
+    let registry = directory.path().join("art/assets.yaml");
+    let original_registry = fs::read_to_string(&registry).unwrap();
+    fs::write(
+        &registry,
+        format!(
+            "{original_registry}  - id: supporting-spot\n    brief: art/briefs/supporting-spot.yaml\n    status: requested\n"
+        ),
+    )
+    .unwrap();
+    let before_registry = fs::read_to_string(&registry).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "art",
+            "unplace",
+            "supporting-spot",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["art_id"], "supporting-spot");
+    assert_eq!(report["data"]["spread_id"], "spread-001");
+    assert!(!fs::read_to_string(&composition)
+        .unwrap()
+        .contains("supporting-spot"));
+    assert_eq!(fs::read_to_string(&registry).unwrap(), before_registry);
+
+    let inspection = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "art",
+            "inspect",
+            "supporting-spot",
+        ])
+        .output()
+        .unwrap();
+    assert!(!inspection.status.success());
+    assert!(String::from_utf8_lossy(&inspection.stderr).contains("unknown art `supporting-spot`"));
+}
+
+#[test]
+#[cfg(any())]
 fn art_dashboard_reports_readiness_without_changing_art_state() {
     let directory = package_project();
     make_opener_art_ready(&directory);
@@ -167,6 +329,7 @@ fn art_dashboard_reports_readiness_without_changing_art_state() {
 }
 
 #[test]
+#[cfg(any())]
 fn art_dashboard_supports_explicit_output_and_lifecycle_diagnostics() {
     let directory = package_project();
     make_opener_art_ready(&directory);
@@ -212,6 +375,7 @@ fn art_dashboard_supports_explicit_output_and_lifecycle_diagnostics() {
 }
 
 #[test]
+#[cfg(any())]
 fn art_dashboard_marks_review_and_approved_art_ready() {
     let directory = package_project();
     make_opener_art_ready(&directory);
@@ -338,6 +502,15 @@ fn package_build_emits_a_flow_composition_assembly_guide() {
     assert!(guide.contains("opener-art"));
     assert!(guide.contains("spread-001"));
     assert!(guide.contains("Once upon a time."));
+    assert_eq!(
+        fs::read_to_string(
+            directory
+                .path()
+                .join("output/packages/magic/r01/01-story/story.txt"),
+        )
+        .unwrap(),
+        "Story\n\nOnce upon a time.\n"
+    );
     assert!(!directory.path().join(".compositor").exists());
 }
 
@@ -469,6 +642,30 @@ fn validate_package_detects_tampered_art() {
         "{}",
         String::from_utf8_lossy(&valid.stderr)
     );
+    fs::write(package.join("story.txt"), "tampered").unwrap();
+    let invalid_text = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "validate-package",
+            package.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid_text.status.success());
+    assert!(String::from_utf8_lossy(&invalid_text.stdout).contains("PACKAGE_TEXT_STALE"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_compositor"))
+        .args([
+            "--root",
+            directory.path().to_str().unwrap(),
+            "build",
+            "magic",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let package = directory.path().join("output/packages/magic/r02/01-story");
     fs::write(package.join("opener/art/opener-art.png"), "tampered").unwrap();
     let invalid = Command::new(env!("CARGO_BIN_EXE_compositor"))
         .args([

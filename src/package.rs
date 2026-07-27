@@ -108,6 +108,7 @@ pub fn build(
         .prefix(".compositor-package-")
         .tempdir_in(output_parent)?;
     let package_root = temporary.path();
+    fs::write(package_root.join("story.txt"), render_story_text(story))?;
     let opener_directory = package_root.join("opener");
     fs::create_dir_all(opener_directory.join("art"))?;
     fs::write(
@@ -256,7 +257,7 @@ pub fn build(
         serde_yaml::to_string(&report)
             .map_err(|error| AppError::serialization(error.to_string()))?,
     )?;
-    let root_manifest = serde_json::json!({"schema":"compositor.dev/production-package/v1","story":{"id":story.id,"title":story.title,"source_revision":story.source_hash},"edition":composition.edition,"opener":{"directory":"opener","title":composition.opener.title,"placement":composition.opener.placement},"build":{"asset_policy":format!("{:?}",policy.minimum).to_lowercase(),"strict_art":policy.strict},"spreads":{"count":entries.len(),"entries":entries}});
+    let root_manifest = serde_json::json!({"schema":"compositor.dev/production-package/v1","story":{"id":story.id,"title":story.title,"source_revision":story.source_hash},"text":{"file":"story.txt"},"edition":composition.edition,"opener":{"directory":"opener","title":composition.opener.title,"placement":composition.opener.placement},"build":{"asset_policy":format!("{:?}",policy.minimum).to_lowercase(),"strict_art":policy.strict},"spreads":{"count":entries.len(),"entries":entries}});
     fs::write(
         package_root.join("manifest.yaml"),
         serde_yaml::to_string(&root_manifest)
@@ -296,6 +297,8 @@ pub struct PackageValidationOutput {
 #[derive(Debug, Deserialize)]
 struct PackageRootManifest {
     story: PackageStoryManifest,
+    #[serde(default)]
+    text: Option<PackageStoryTextManifest>,
     edition: Edition,
     opener: PackageOpenerEntry,
     build: PackageBuildManifest,
@@ -312,6 +315,10 @@ struct PackageStoryManifest {
     id: String,
     title: String,
     source_revision: String,
+}
+#[derive(Debug, Deserialize)]
+struct PackageStoryTextManifest {
+    file: String,
 }
 #[derive(Debug, Deserialize)]
 struct PackageOpenerEntry {
@@ -446,6 +453,24 @@ pub fn validate_package(
             "PACKAGE_SOURCE_STALE",
             "package source revision does not match the current manuscript".into(),
             "manifest.yaml",
+            Some(&story.id),
+            None,
+        );
+    }
+    let expected_story_text = render_story_text(story);
+    if !matches!(
+        root_manifest.text,
+        Some(PackageStoryTextManifest { ref file }) if file == "story.txt"
+    ) || fs::read_to_string(package.join("story.txt"))
+        .map(|text| text != expected_story_text)
+        .unwrap_or(true)
+    {
+        package_issue(
+            &mut report,
+            Severity::Error,
+            "PACKAGE_TEXT_STALE",
+            "package story text does not match the current manuscript".into(),
+            "story.txt",
             Some(&story.id),
             None,
         );
@@ -950,6 +975,15 @@ fn render_spread_text(paragraphs: &[&crate::model::SourceParagraph]) -> String {
     }
 }
 
+fn render_story_text(story: &Story) -> String {
+    let body = crate::text::render_story(story);
+    if body.is_empty() {
+        format!("{}\n", story.title)
+    } else {
+        format!("{}\n\n{body}", story.title)
+    }
+}
+
 fn source_paragraphs<'a>(
     story: &'a Story,
     from: &SourceRef,
@@ -1253,6 +1287,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(output.join("opener/title.txt")).unwrap(),
             "Story\n"
+        );
+        assert_eq!(
+            fs::read_to_string(output.join("story.txt")).unwrap(),
+            "Story\n\nOnce upon a time.\n"
         );
         assert!(output.join("spreads/001-opening/text.md").is_file());
         assert_eq!(

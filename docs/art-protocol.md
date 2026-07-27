@@ -43,8 +43,13 @@ and editorial note; selection is deliberately not a brief field.
    Composition Plan reference.
 4. Run Flow, Composition, coverage, and strict art validation.
 5. The rendering skill writes candidate files and adds them to that record.
-6. Run `compositor art dashboard` to write `output/reports/art-dashboard.html`.
-   It is a read-only, project-wide review surface that shows whether each
+6. Run `compositor art serve` to review the current project state locally and
+   perform confirmed lifecycle actions through the browser. Use **Not needed**
+   (or `compositor art unplace <art-id>`) only to remove a narrative-spread
+   placement; it retains the art files and registry record as an orphan. Use
+   `reject` for a lifecycle rejection and `supersede` when another artwork
+   replaces an approved asset.
+   It is a local, project-wide review surface that shows whether each
    required record meets the default draft package policy and gives its next
    lifecycle command. It does not replace strict validation or a package build.
 7. Run `compositor art select <art-id> <candidate-id>`, then `compositor art review <art-id>`.

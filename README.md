@@ -95,11 +95,18 @@ to inspect the opener separately and identify each narrative spread as covered,
 missing, or invalid. Story art referenced by a
 Composition Plan must declare that spread in `source.spread_ids`.
 
-Use `compositor art dashboard` to write a project-wide, read-only HTML art
-review report at `output/reports/art-dashboard.html`. It groups required art by
-story, shows candidates, lifecycle state, default draft-policy readiness, and
-the exact next lifecycle command. `art validate` and strict package builds
+Use `compositor art serve` to open a project-wide local art review surface. It
+reads the current project files for every page, groups required art by story,
+and can run select, review, reject, approve, and confirmed **Not needed**
+actions. Not needed removes a narrative-spread placement while retaining its
+files and registry history; `reject` remains a lifecycle decision and
+`supersede` names a replacement asset. `art validate` and strict package builds
 remain the authoritative checks.
+
+On Unix, the server gracefully stops on Ctrl-C (`SIGINT`), `SIGTERM`, or
+`SIGHUP`. It keeps its project lock until in-flight requests have stopped and
+then removes the lock. `SIGKILL`, crashes, and power loss can leave a stale
+lock that must be removed only after confirming no server is still running.
 
 ## Package builds
 
@@ -126,10 +133,12 @@ allocated automatically (`r01`, then `r02`, and so on); a multi-story build
 shares one revision. Use `--output` only when a single story needs a
 non-conventional destination.
 
-Every package includes `assembly-guide.html`, an HTML review surface for the
-resolved opener and spreads. Existing `.compositor/` state is unsupported: keep
-it in version control, remove it manually, and rebuild from the Flow and
-Composition Plans. Normal commands never modify source Markdown or assets.
+Every package includes `story.txt`, a self-contained plain-text copy of the
+title and complete story for flowing in a layout application, plus
+`assembly-guide.html`, an HTML review surface for the resolved opener and
+spreads. Existing `.compositor/` state is unsupported: keep it in version
+control, remove it manually, and rebuild from the Flow and Composition Plans.
+Normal commands never modify source Markdown or assets.
 
 ## Artwork records
 
@@ -142,8 +151,8 @@ them. See `docs/art-protocol.md` for the v3 format and complete examples. Use
 explicitly `select`, `review`, and `approve` a candidate to copy the pinned asset
 into `assets/approved/`.
 
-Package `manifest.yaml` records the source revision, Composition edition,
-asset policy, and ordered package entries. `art/assets.yaml` is the project
-lifecycle registry; package `diagnostics.yaml` records build findings; and
-`assembly-guide.html` is the human review surface for the exact opener and
-spreads included in that package.
+Package `manifest.yaml` records the source revision, complete-story text file,
+Composition edition, asset policy, and ordered package entries. `art/assets.yaml`
+is the project lifecycle registry; package `diagnostics.yaml` records build
+findings; and `assembly-guide.html` is the human review surface for the exact
+opener and spreads included in that package.

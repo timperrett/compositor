@@ -63,10 +63,31 @@ pub fn validate_layout(config: &Config, layout: &ArtLayout) -> Result<(), String
 pub struct DerivedArtRequirement {
     pub art_id: String,
     pub story_id: String,
+    pub placement: ArtPlacement,
     pub anchor_id: Option<String>,
     pub art_layout: Option<ArtLayout>,
     pub geometry: Option<ArtGeometry>,
     pub art_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtPlacement {
+    Opener,
+    Spread { spread_id: String },
+}
+
+impl ArtPlacement {
+    pub const fn can_unplace(&self) -> bool {
+        matches!(self, Self::Spread { .. })
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Opener => "opener".into(),
+            Self::Spread { spread_id } => format!("spreads: {spread_id}"),
+        }
+    }
 }
 
 pub fn requirements_for_story(
@@ -92,13 +113,19 @@ pub fn requirements_for_story(
         return Ok(output);
     }
     let composition = crate::composition::load_plan(&composition_path)?;
-    let ids = std::iter::once(composition.opener.art.id).chain(
-        composition
-            .spreads
-            .iter()
-            .flat_map(|spread| spread.art_assets.iter().map(|art| art.id.clone())),
+    let placements = std::iter::once((composition.opener.art.id, ArtPlacement::Opener)).chain(
+        composition.spreads.iter().flat_map(|spread| {
+            spread.art_assets.iter().map(move |art| {
+                (
+                    art.id.clone(),
+                    ArtPlacement::Spread {
+                        spread_id: spread.id.clone(),
+                    },
+                )
+            })
+        }),
     );
-    for art_id in ids {
+    for (art_id, placement) in placements {
         let anchor = crate::art_brief::load(root, &art_id)?
             .map(|brief| brief.source.anchor_id)
             .unwrap_or_else(|| art_id.clone());
@@ -117,17 +144,26 @@ pub fn requirements_for_story(
             ),
             None => (None, None, None),
         };
-        output.insert(
-            art_id.clone(),
-            DerivedArtRequirement {
-                art_id,
-                story_id: story.id.clone(),
-                anchor_id: unit.and_then(|unit| unit.directives.anchor.clone()),
-                art_layout,
-                geometry,
-                art_note,
-            },
-        );
+        if output
+            .insert(
+                art_id.clone(),
+                DerivedArtRequirement {
+                    art_id,
+                    story_id: story.id.clone(),
+                    placement,
+                    anchor_id: unit.and_then(|unit| unit.directives.anchor.clone()),
+                    art_layout,
+                    geometry,
+                    art_note,
+                },
+            )
+            .is_some()
+        {
+            return Err(AppError::command(format!(
+                "artwork is placed more than once in {}",
+                composition_path.display()
+            )));
+        }
     }
     Ok(output)
 }

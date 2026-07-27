@@ -230,14 +230,6 @@ enum ArtCommand {
         #[arg(long)]
         edition: String,
     },
-    /// Write a project-wide HTML report of artwork lifecycle readiness.
-    ///
-    /// Example: `compositor art dashboard`
-    Dashboard {
-        /// Project-relative destination for the HTML report.
-        #[arg(long, default_value = "output/reports/art-dashboard.html")]
-        output: PathBuf,
-    },
     /// Copy a generated image into the brief as a geometry-checked candidate.
     ///
     /// Candidates that do not match the current requirement geometry are kept
@@ -304,6 +296,14 @@ enum ArtCommand {
         #[arg(long)]
         feedback: Option<String>,
     },
+    /// Serve the live local art review dashboard on localhost.
+    ///
+    /// Example: `compositor art serve --port 3000`
+    Serve {
+        /// Localhost TCP port to bind.
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+    },
     /// Mark an artwork record as superseded by another artwork ID.
     ///
     /// Example: `compositor art supersede old-opener new-opener`
@@ -312,6 +312,13 @@ enum ArtCommand {
         art_id: String,
         /// Successor artwork ID that replaces it.
         successor: String,
+    },
+    /// Remove a narrative-spread artwork placement without deleting its files or history.
+    ///
+    /// Example: `compositor art unplace lantern-supporting-spot`
+    Unplace {
+        /// Artwork ID currently placed on a narrative spread.
+        art_id: String,
     },
     /// Validate art briefs, requirements, and the asset registry.
     ///

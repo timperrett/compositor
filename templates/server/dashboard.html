@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compositor art review</title>
+    <style>
+      :root { color: #1f211e; background: #f6f1e8; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      * { box-sizing: border-box; } body { min-width: 320px; margin: 0; background-color: #f6f1e8; background-image: radial-gradient(rgba(80, 66, 49, .09) .55px, transparent .55px); background-size: 7px 7px; color: #1f211e; line-height: 1.5; }
+      a { color: inherit; } .shell { width: min(100% - 2rem, 76rem); margin: auto; } .site-header { position: sticky; top: 0; z-index: 1; border-bottom: 1px solid #d7cdbf; background: rgba(246,241,232,.95); } .site-header .shell { display: flex; min-height: 4rem; align-items: center; justify-content: space-between; gap: 1rem; }
+      .brand, h2, h3 { font-family: "Iowan Old Style", Palatino, Georgia, serif; } .brand { font-size: 1.45rem; } .product-label, .rule-label, label { color: #4d504a; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; } .filter-panel { margin-top: 2rem; padding: 1.3rem 1.5rem; border: 1px solid #d7cdbf; background: rgba(251,247,239,.65); } .filters { display:grid; grid-template-columns: repeat(auto-fit,minmax(10rem,1fr)); gap:1rem; margin-top:1rem; } label { display:grid; gap:.4rem; } select { padding:.65rem; border:1px solid #bcae9c; background:#fffaf2; } .checkbox { display:flex; align-items:center; gap:.55rem; }
+      .records { margin-top: 3rem; } .story { margin: 2.5rem 0; } h2 { font-size: clamp(1.8rem,4vw,2.7rem); line-height:1.1; } .card { margin:.9rem 0; padding:1.3rem; border:1px solid #d7cdbf; border-left:4px solid #7a8076; background:rgba(255,252,246,.82); } .card.ready { border-left-color:#58705d; } .card.blocked { border-left-color:#a34e32; } .card.orphan { border-left-color:#7a6249; } h3 { margin:0; font-size:1.55rem; } .badges,.candidate-choices,.actions { display:flex; flex-wrap:wrap; gap:.45rem; margin:.8rem 0; } .badge { padding:.18rem .45rem; border:1px solid #d7cdbf; background:#f6f1e8; font: .68rem monospace; text-transform:uppercase; } .meta,.guidance { color:#565850; font-size:.88rem; } .decision-panel { margin-top:1rem; padding:.9rem; border-top:1px solid #d7cdbf; background:#f3ebdf; } .decision-panel h4 { margin:0; color:#58705d; font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; } fieldset { min-width:0; margin:.8rem 0; padding:0; border:0; } legend { color:#4d504a; font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; } .candidate-choice { display:block; max-width:180px; padding:.35rem; border:1px solid #d7cdbf; background:#fffaf2; cursor:pointer; } .candidate-choice:has(input:checked) { border:2px solid #58705d; } .candidate-choice input { margin:.3rem; } .candidate-choice img,.selected-art img,.approved-art img { display:block; width:170px; max-width:100%; height:130px; object-fit:contain; background:#fffaf2; } .selected-art,.approved-art { display:flex; align-items:center; gap:.7rem; color:#58705d; font-weight:700; } .selected-art img,.approved-art img { width:90px; height:70px; } .button { display:inline-block; padding:.55rem .75rem; border:1px solid #58705d; background:#58705d; color:#fffaf2; font:inherit; text-decoration:none; cursor:pointer; } .button.secondary { border-color:#bcae9c; background:#fffaf2; color:#1f211e; } .button.danger { border-color:#a34e32; background:#a34e32; } .not-needed { margin-top:.8rem; } .action-error { margin:.75rem 0 0; color:#a34e32; font-weight:700; }
+    </style>
+  </head>
+  <body>
+    <header class="site-header"><div class="shell"><div class="brand">Compositor</div><p class="product-label">Art review · local server</p></div></header>
+    <main class="shell">
+      <section class="filter-panel"><p class="rule-label">Filter artwork</p><div class="filters">
+        <label>Compendium<select id="compendium"><option value="">All compendiums</option>{% for compendium in compendiums %}<option value="{{ compendium }}">{{ compendium }}</option>{% endfor %}</select></label>
+        <label>Story<select id="story"><option value="">All stories</option>{% for story in stories %}<option value="{{ story }}">{{ story }}</option>{% endfor %}</select></label>
+        <label>Lifecycle<select id="lifecycle"><option value="">All lifecycle states</option><option value="unregistered">Unregistered</option><option value="requested">Requested</option><option value="draft">Draft</option><option value="review">Review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="superseded">Superseded</option></select></label>
+        <label>Readiness<select id="readiness"><option value="">All readiness</option>{% for label in readiness_labels %}<option value="{{ label }}">{{ label }}</option>{% endfor %}</select></label><label class="checkbox"><input id="blockers" type="checkbox" />Required blockers only</label>
+      </div></section>
+      <section class="records"><p class="rule-label">Artwork records</p>{% for group in story_groups %}<section class="story"><h2>{{ group.name }}</h2>{% for entry in group.entries %}
+        {% include "server/card.html" %}{% endfor %}</section>{% endfor %}</section>
+    </main>
+    <script>
+      const controls = Object.fromEntries(['compendium', 'story', 'lifecycle', 'readiness', 'blockers'].map((id) => [id, document.getElementById(id)]));
+      function filter() {
+        const { compendium, story, lifecycle, readiness, blockers } = controls;
+        document.querySelectorAll('.card').forEach((card) => {
+          const matches =
+            (!compendium.value || card.dataset.compendium === compendium.value) &&
+            (!story.value || card.dataset.story === story.value) &&
+            (!lifecycle.value || card.dataset.lifecycle === lifecycle.value) &&
+            (!readiness.value || card.dataset.readiness === readiness.value) &&
+            (!blockers.checked || card.dataset.blocker === 'true');
+          card.hidden = !matches;
+        });
+        document.querySelectorAll('.story').forEach((section) => {
+          section.hidden = !Array.from(section.querySelectorAll('.card')).some((card) => !card.hidden);
+        });
+      }
+      function restoreFilters() {
+        const params = new URLSearchParams(window.location.search);
+        for (const id of ['compendium', 'story', 'lifecycle', 'readiness']) {
+          if (params.has(id)) controls[id].value = params.get(id);
+        }
+        controls.blockers.checked = params.get('blockers') === '1';
+      }
+      function updateFilterUrl() {
+        const url = new URL(window.location.href);
+        for (const id of ['compendium', 'story', 'lifecycle', 'readiness']) {
+          if (controls[id].value) url.searchParams.set(id, controls[id].value);
+          else url.searchParams.delete(id);
+        }
+        if (controls.blockers.checked) url.searchParams.set('blockers', '1');
+        else url.searchParams.delete('blockers');
+        history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+      function updateFilters() {
+        filter();
+        updateFilterUrl();
+      }
+      restoreFilters();
+      filter();
+      Object.values(controls).forEach((control) => control.addEventListener('change', updateFilters));
+
+      async function submitAction(form) {
+        const card = form.closest('.card');
+        const errorElement = card.querySelector('.action-error');
+        errorElement.hidden = true;
+        try {
+          const response = await fetch(form.action, {
+            method: form.method,
+            body: new URLSearchParams(new FormData(form)),
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+              'X-Compositor-Dashboard': '1',
+            },
+          });
+          if (!response.ok) {
+            const errorPage = new DOMParser().parseFromString(await response.text(), 'text/html');
+            throw new Error(errorPage.body.textContent.trim() || 'request failed');
+          }
+          const replacement = document.createRange().createContextualFragment(await response.text()).firstElementChild;
+          if (!replacement || !replacement.matches('.card')) throw new Error('invalid response');
+          card.replaceWith(replacement);
+          filter();
+        } catch (requestError) {
+          errorElement.hidden = false;
+          errorElement.textContent = `Could not complete this action: ${requestError.message}. Reload to see the current artwork state.`;
+        }
+      }
+      document.addEventListener('submit', (event) => {
+        const form = event.target.closest('form[data-async-action]');
+        if (!form) return;
+        event.preventDefault();
+        submitAction(form);
+      });
+    </script>
+  </body>
+</html>

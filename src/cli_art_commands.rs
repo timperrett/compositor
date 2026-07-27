@@ -1,6 +1,6 @@
 use super::*;
 use crate::art_brief::{ArtCandidate, ArtUsage, CandidateGeometry};
-use crate::assets::{ApprovedAsset, AssetRecord, AssetRegistry, AssetSelection, AssetStatus};
+use crate::assets::{AssetRecord, AssetRegistry, AssetStatus};
 use crate::composition::{ArtReference, IllustrationIntent};
 use crate::flow::SourceRange;
 use serde::Deserialize;
@@ -113,31 +113,14 @@ pub(super) fn art_command(
             candidate_id,
             feedback,
         } => select_candidate(root, config, format, &art_id, &candidate_id, feedback),
-        ArtCommand::Review { art_id } => {
-            transition_asset(root, config, format, &art_id, AssetStatus::Review)
-        }
+        ArtCommand::Review { art_id } => review_asset(root, config, format, &art_id),
         ArtCommand::Approve { art_id } => approve_asset(root, config, format, &art_id),
-        ArtCommand::Dashboard { output } => {
-            let destination = crate::art_dashboard::resolve_output(root, &output)?;
-            let dashboard = crate::art_dashboard::analyze(root, config)?;
-            crate::art_dashboard::write_html(root, &destination, &dashboard)?;
-            print_report(
-                format,
-                "art dashboard",
-                crate::art_dashboard::DashboardOutput::from_dashboard(
-                    root,
-                    &destination,
-                    &dashboard,
-                ),
-                ValidationReport::default(),
-            )
-        }
-        ArtCommand::Reject { art_id } => {
-            transition_asset(root, config, format, &art_id, AssetStatus::Rejected)
-        }
+        ArtCommand::Reject { art_id } => reject_asset(root, config, format, &art_id),
+        ArtCommand::Serve { port } => crate::server::serve(root, config, port),
         ArtCommand::Supersede { art_id, successor } => {
             supersede_asset(root, format, &art_id, &successor)
         }
+        ArtCommand::Unplace { art_id } => unplace_asset(root, config, format, &art_id),
         ArtCommand::List { story } => {
             let project = discover(root, config)?;
             if let Some(story_id) = story.as_deref() {
@@ -283,6 +266,16 @@ pub(super) fn art_command(
             }
         }
     }
+}
+
+fn unplace_asset(
+    root: &Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let output = crate::art_workflow::unplace(root, config, art_id)?;
+    print_report(format, "art unplace", output, ValidationReport::default())
 }
 
 fn ingest_candidate(
@@ -652,7 +645,61 @@ fn register_asset(
     )
 }
 
+#[allow(dead_code)]
 fn select_candidate(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+    candidate_id: &str,
+    feedback: Option<String>,
+) -> Result<(), AppError> {
+    let registry = crate::art_workflow::select(root, config, art_id, candidate_id, feedback)?;
+    print_report(format, "art select", registry, ValidationReport::default())
+}
+
+fn review_asset(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let registry = crate::art_workflow::review(root, config, art_id)?;
+    print_report(
+        format,
+        "art lifecycle",
+        registry,
+        ValidationReport::default(),
+    )
+}
+
+fn reject_asset(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let registry = crate::art_workflow::reject(root, config, art_id)?;
+    print_report(
+        format,
+        "art lifecycle",
+        registry,
+        ValidationReport::default(),
+    )
+}
+
+fn approve_asset(
+    root: &std::path::Path,
+    config: &Config,
+    format: OutputFormat,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let registry = crate::art_workflow::approve(root, config, art_id)?;
+    print_report(format, "art approve", registry, ValidationReport::default())
+}
+
+#[cfg(any())]
+fn select_candidate_legacy(
     root: &std::path::Path,
     config: &Config,
     format: OutputFormat,
@@ -709,7 +756,8 @@ fn select_candidate(
     print_report(format, "art select", registry, ValidationReport::default())
 }
 
-fn transition_asset(
+#[cfg(any())]
+fn transition_asset_legacy(
     root: &std::path::Path,
     config: &Config,
     format: OutputFormat,
@@ -731,7 +779,8 @@ fn transition_asset(
     )
 }
 
-fn approve_asset(
+#[cfg(any())]
+fn approve_asset_legacy(
     root: &std::path::Path,
     config: &Config,
     format: OutputFormat,

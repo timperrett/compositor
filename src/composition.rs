@@ -170,8 +170,130 @@ pub struct DesignCatalog {
 
 pub fn load_plan(path: &Path) -> Result<CompositionPlan, AppError> {
     let text = fs::read_to_string(path)?;
-    serde_yaml::from_str(&text)
+    parse_plan(&text, path)
+}
+
+pub fn remove_spread_art_reference(
+    path: &Path,
+    spread_id: &str,
+    art_id: &str,
+) -> Result<(), AppError> {
+    let text = fs::read_to_string(path)?;
+    let plan = parse_plan(&text, path)?;
+    let spread = plan
+        .spreads
+        .iter()
+        .find(|spread| spread.id == spread_id)
+        .ok_or_else(|| AppError::command(format!("unknown spread `{spread_id}`")))?;
+    if !spread.art_assets.iter().any(|asset| asset.id == art_id) {
+        return Err(AppError::command(format!(
+            "art `{art_id}` is not placed on spread `{spread_id}`"
+        )));
+    }
+    let updated = remove_spread_art_reference_text(&text, spread_id, art_id, path)?;
+    let updated_plan = parse_plan(&updated, path)?;
+    let updated_spread = updated_plan
+        .spreads
+        .iter()
+        .find(|spread| spread.id == spread_id)
+        .ok_or_else(|| {
+            AppError::command(format!("updated plan is missing spread `{spread_id}`"))
+        })?;
+    if updated_spread
+        .art_assets
+        .iter()
+        .any(|asset| asset.id == art_id)
+    {
+        return Err(AppError::command(format!(
+            "could not remove art `{art_id}` from spread `{spread_id}`"
+        )));
+    }
+    crate::storage::write_text_atomic(path, &updated)
+}
+
+fn parse_plan(text: &str, path: &Path) -> Result<CompositionPlan, AppError> {
+    serde_yaml::from_str(text)
         .map_err(|error| AppError::serialization(format!("{}: {error}", path.display())))
+}
+
+fn remove_spread_art_reference_text(
+    text: &str,
+    spread_id: &str,
+    art_id: &str,
+    path: &Path,
+) -> Result<String, AppError> {
+    let mut lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
+    let had_trailing_newline = text.ends_with('\n');
+    let spreads = lines
+        .iter()
+        .position(|line| indentation(line) == 0 && line.trim() == "spreads:")
+        .ok_or_else(|| unsupported_unplace_format(path))?;
+    let spread_start = lines[spreads + 1..]
+        .iter()
+        .position(|line| yaml_id(line, 2).as_deref() == Some(spread_id))
+        .map(|index| spreads + 1 + index)
+        .ok_or_else(|| AppError::command(format!("unknown spread `{spread_id}`")))?;
+    let spread_end = lines[spread_start + 1..]
+        .iter()
+        .position(|line| indentation(line) == 2 && yaml_id(line, 2).is_some())
+        .map(|index| spread_start + 1 + index)
+        .unwrap_or(lines.len());
+    let assets_line = lines[spread_start + 1..spread_end]
+        .iter()
+        .position(|line| indentation(line) == 4 && line.trim_start().starts_with("art_assets:"))
+        .map(|index| spread_start + 1 + index)
+        .ok_or_else(|| unsupported_unplace_format(path))?;
+    let assets_end = lines[assets_line + 1..spread_end]
+        .iter()
+        .position(|line| indentation(line) <= 4 && !line.trim().is_empty())
+        .map(|index| assets_line + 1 + index)
+        .unwrap_or(spread_end);
+    let item_starts = (assets_line + 1..assets_end)
+        .filter(|index| yaml_id(&lines[*index], 6).is_some())
+        .collect::<Vec<_>>();
+    let item_index = item_starts
+        .iter()
+        .position(|index| yaml_id(&lines[*index], 6).as_deref() == Some(art_id))
+        .ok_or_else(|| unsupported_unplace_format(path))?;
+    let item_start = item_starts[item_index];
+    let item_end = item_starts
+        .get(item_index + 1)
+        .copied()
+        .unwrap_or(assets_end);
+    if item_starts.len() == 1 {
+        let comment = lines[assets_line]
+            .find('#')
+            .map(|index| format!(" {}", &lines[assets_line][index..]))
+            .unwrap_or_default();
+        lines[assets_line] = format!("{}art_assets: []{comment}", " ".repeat(4));
+        lines.drain(assets_line + 1..item_end);
+    } else {
+        lines.drain(item_start..item_end);
+    }
+    let mut updated = lines.join("\n");
+    if had_trailing_newline {
+        updated.push('\n');
+    }
+    Ok(updated)
+}
+
+fn indentation(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn yaml_id(line: &str, expected_indent: usize) -> Option<String> {
+    if indentation(line) != expected_indent {
+        return None;
+    }
+    let value = line.trim_start().strip_prefix("- id:")?.trim();
+    serde_yaml::from_str::<String>(value).ok()
+}
+
+fn unsupported_unplace_format(path: &Path) -> AppError {
+    AppError::command(format!(
+        "cannot safely edit `{}`; use block-style `art_assets` entries or remove the reference manually",
+        path.display()
+    ))
 }
 
 pub fn load_catalog(directory: &Path) -> Result<DesignCatalog, AppError> {
@@ -696,6 +818,48 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "OPENER_ART_ON_STORY_SPREAD"));
+    }
+
+    #[test]
+    fn removes_only_the_targeted_spread_art_reference() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hardcover.composition.yaml");
+        fs::write(&path, composition_with_art_assets()).unwrap();
+
+        remove_spread_art_reference(&path, "spread-001", "remove-me").unwrap();
+
+        let plan = load_plan(&path).unwrap();
+        assert_eq!(plan.spreads[0].art_assets.len(), 1);
+        assert_eq!(plan.spreads[0].art_assets[0].id, "keep-me");
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# keep this artwork"));
+        assert!(!text.contains("remove-me"));
+    }
+
+    #[test]
+    fn keeps_an_empty_art_assets_field_when_removing_the_last_reference() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hardcover.composition.yaml");
+        fs::write(
+            &path,
+            composition_with_art_assets().replace(
+                "      - id: keep-me\n        role: primary-subject\n        # keep this artwork\n",
+                "",
+            ),
+        )
+        .unwrap();
+
+        remove_spread_art_reference(&path, "spread-001", "remove-me").unwrap();
+
+        let plan = load_plan(&path).unwrap();
+        assert!(plan.spreads[0].art_assets.is_empty());
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("    art_assets: []"));
+    }
+
+    fn composition_with_art_assets() -> &'static str {
+        "schema: compositor.dev/composition-plan/v2\nstory:\n  id: story\n  flow: story.flow.yaml\nedition:\n  id: hardcover\n  design_system: edgar-v1\nopener:\n  title: Story\n  placement: center-page\n  art: { id: opener, role: primary-subject }\nspreads:\n  - id: spread-001\n    layout: { family: environment-led, variant: opening-quiet-upper-left }\n    text: { density: light }\n    illustration: { mode: scene, focal_subject: a scene }\n    art_assets:\n      - id: keep-me\n        role: primary-subject\n        # keep this artwork\n      - id: remove-me\n        role: supporting-detail\n"
     }
 
     #[test]
